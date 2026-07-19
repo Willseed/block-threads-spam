@@ -6,18 +6,22 @@ import { requireIdentity } from './identity/middleware';
 import type { IdentityVerifier } from './identity/types';
 import { connectionRoutes } from './routes/connections';
 import { evidenceRoutes } from './routes/evidence';
+import { oauthCallbackRoutes, oauthConnectionRoutes } from './routes/oauth';
+import type { OAuthClientFactory } from './routes/oauth';
 import { requireTenant } from './tenant/middleware';
 import type { RepositoryFactory } from './tenant/middleware';
 
 export interface AppDependencies {
   identityVerifier?: IdentityVerifier;
   repositoryFactory?: RepositoryFactory;
+  oauthClientFactory?: OAuthClientFactory;
 }
 
 export function createApp(dependencies: AppDependencies = {}) {
   const application = new Hono<AppEnvironment>();
 
   application.use('/api/*', secureHeaders());
+  application.use('/auth/*', secureHeaders());
 
   application.get('/api/health', (context) =>
     context.json({
@@ -28,6 +32,8 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   application.use('/api/*', requireIdentity(dependencies.identityVerifier));
   application.use('/api/*', requireTenant(dependencies.repositoryFactory));
+  application.use('/auth/*', requireIdentity(dependencies.identityVerifier));
+  application.use('/auth/*', requireTenant(dependencies.repositoryFactory));
 
   application.get('/api/me', (context) => {
     const identity = context.get('identity');
@@ -39,10 +45,15 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
 
   application.route('/api/connections', connectionRoutes);
+  application.route(
+    '/api/connections',
+    oauthConnectionRoutes(dependencies.oauthClientFactory),
+  );
   application.route('/api/evidence', evidenceRoutes);
+  application.route('/auth/threads', oauthCallbackRoutes(dependencies.oauthClientFactory));
 
   application.notFound((context) => {
-    if (context.req.path.startsWith('/api/')) {
+    if (context.req.path.startsWith('/api/') || context.req.path.startsWith('/auth/')) {
       return context.json(
         {
           error: {

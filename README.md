@@ -64,6 +64,8 @@ Wrangler 設定使用 automatic provisioning：首次 deploy 時會為只宣告 
 
 Threads OAuth adapter 依序交換 authorization code、升級為長效 token，並以官方 `/me` 比對 exchange 回傳的 `user_id`。PKCE 目前未由 Threads 官方參數表文件化，因此不把它當成既有安全控制；實作改以強制單次 state、固定 redirect URI、confidential client 與立即交換保護流程。
 
+`POST /api/connections/:connectionId/oauth/start` 需要近期應用身分驗證，並把一次性 state 綁定 tenant、使用者、連線、Access session 與固定 callback URI。`GET /auth/threads/callback` 會先原子消耗 state 才交換 token；成功後仍保持 `awaiting_identity_confirmation`，使用者必須以 `POST /api/connections/:connectionId/oauth/confirm` 精確確認官方 `/me` 回傳的帳號名稱。
+
 ## 私有證據
 
 R2 bucket 綁定名稱為 `EVIDENCE`，不可啟用 public `r2.dev` 網址。證據限定 5 MiB 與 allowlist MIME，寫入時計算 SHA-256 並使用不可預測 key；D1 只保存索引。讀取與刪除每次都重新驗證 tenant membership，刪除後保留最小 tombstone 與稽核，不回傳任何 bucket public URL。

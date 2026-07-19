@@ -36,6 +36,23 @@ export interface MetaThreadsOAuthOptions {
   now?: () => Date;
 }
 
+export function buildMetaThreadsAuthorizationUrl(
+  appId: string,
+  redirectUri: string,
+  state: string,
+): string {
+  if (!appId || !state || state.length > 128) throw new TypeError('Invalid OAuth request');
+  const redirect = new URL(redirectUri);
+  if (redirect.protocol !== 'https:') throw new TypeError('Invalid OAuth redirect URI');
+  const url = new URL('https://threads.com/oauth/authorize');
+  url.searchParams.set('client_id', appId);
+  url.searchParams.set('redirect_uri', redirect.toString());
+  url.searchParams.set('scope', 'threads_basic,threads_profile_discovery');
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('state', state);
+  return url.toString();
+}
+
 function providerFailure(status: number, body: unknown): OAuthProviderFailure {
   const parsed = errorSchema.safeParse(body);
   const code = parsed.success ? parsed.data.error.code : undefined;

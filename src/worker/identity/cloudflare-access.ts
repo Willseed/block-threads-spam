@@ -7,6 +7,11 @@ import type { AppIdentity, IdentityVerifier } from './types';
 
 const jwksByTeamDomain = new Map<string, JWTVerifyGetKey>();
 
+async function sha256(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function parseTeamDomain(value: string | undefined): URL {
   if (!value) throw new AuthenticationError('Identity provider is not configured');
 
@@ -66,6 +71,7 @@ export class CloudflareAccessVerifier implements IdentityVerifier {
         ...(payload.iat === undefined
           ? {}
           : { authenticatedAt: new Date(payload.iat * 1000).toISOString() }),
+        sessionBinding: await sha256(token),
       };
     } catch {
       throw new AuthenticationError();

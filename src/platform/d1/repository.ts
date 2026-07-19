@@ -8,6 +8,7 @@ export interface TenantContext {
 export interface ThreadsConnectionRecord {
   id: string;
   protectedUsername: string;
+  platformUserId?: string;
   connectionMode: 'meta_oauth' | 'manual_handoff';
   status:
     | 'awaiting_identity_confirmation'
@@ -17,6 +18,21 @@ export interface ThreadsConnectionRecord {
     | 'revoking'
     | 'revoked';
   createdAt: string;
+  revocationVersion: number;
+  lastVerifiedAt?: string;
+}
+
+export interface OAuthAttemptRecord {
+  connectionId: string;
+  redirectUri: string;
+  jobId: string;
+  leaseGeneration: number;
+}
+
+export interface NewOAuthAttempt extends OAuthAttemptRecord {
+  stateHash: string;
+  sessionBinding: string;
+  expiresAt: string;
 }
 
 export interface CandidateRecord {
@@ -60,6 +76,23 @@ export interface ApplicationRepository {
     tenant: TenantContext,
     connectionId: string,
   ): Promise<ThreadsConnectionRecord | undefined>;
+  createOAuthAttempt(tenant: TenantContext, attempt: NewOAuthAttempt): Promise<void>;
+  consumeOAuthAttempt(
+    tenant: TenantContext,
+    stateHash: string,
+    sessionBinding: string,
+  ): Promise<OAuthAttemptRecord | undefined>;
+  stageOAuthIdentity(
+    tenant: TenantContext,
+    connectionId: string,
+    platformUserId: string,
+    username: string,
+  ): Promise<ThreadsConnectionRecord>;
+  confirmOAuthIdentity(
+    tenant: TenantContext,
+    connectionId: string,
+    expectedUsername: string,
+  ): Promise<ThreadsConnectionRecord | undefined>;
   addCandidate(
     tenant: TenantContext,
     connectionId: string,
@@ -86,9 +119,19 @@ interface TenantRow {
 interface ConnectionRow {
   id: string;
   protected_username: string;
+  platform_user_id: string | null;
   connection_mode: ThreadsConnectionRecord['connectionMode'];
   status: ThreadsConnectionRecord['status'];
   created_at: string;
+  revocation_version: number;
+  last_verified_at: string | null;
+}
+
+interface OAuthAttemptRow {
+  connection_id: string;
+  redirect_uri: string;
+  job_id: string;
+  lease_generation: number;
 }
 
 interface CandidateRow {
@@ -128,9 +171,12 @@ function connectionRecord(row: ConnectionRow): ThreadsConnectionRecord {
   return {
     id: row.id,
     protectedUsername: row.protected_username,
+    ...(row.platform_user_id ? { platformUserId: row.platform_user_id } : {}),
     connectionMode: row.connection_mode,
     status: row.status,
     createdAt: row.created_at,
+    revocationVersion: row.revocation_version,
+    ...(row.last_verified_at ? { lastVerifiedAt: row.last_verified_at } : {}),
   };
 }
 
@@ -257,13 +303,15 @@ export class D1Repository implements ApplicationRepository {
       connectionMode,
       status: 'awaiting_identity_confirmation',
       createdAt: now,
+      revocationVersion: 0,
     };
   }
 
   async listConnections(tenant: TenantContext): Promise<ThreadsConnectionRecord[]> {
     const { results } = await this.#db
       .prepare(
-        `SELECT id, protected_username, connection_mode, status, created_at
+        `SELECT id, protected_username, platform_user_id, connection_mode, status, created_at,
+                revocation_version, last_verified_at
          FROM threads_connections
          WHERE tenant_id = ?
            AND EXISTS (
@@ -283,7 +331,8 @@ export class D1Repository implements ApplicationRepository {
   ): Promise<ThreadsConnectionRecord | undefined> {
     const row = await this.#db
       .prepare(
-        `SELECT id, protected_username, connection_mode, status, created_at
+        `SELECT id, protected_username, platform_user_id, connection_mode, status, created_at,
+                revocation_version, last_verified_at
          FROM threads_connections
          WHERE id = ? AND tenant_id = ?
            AND EXISTS (
@@ -294,6 +343,165 @@ export class D1Repository implements ApplicationRepository {
       .bind(connectionId, tenant.tenantId, tenant.tenantId, tenant.userId)
       .first<ConnectionRow>();
     return row ? connectionRecord(row) : undefined;
+  }
+
+  async createOAuthAttempt(tenant: TenantContext, attempt: NewOAuthAttempt): Promise<void> {
+    const result = await this.#db
+      .prepare(
+        `INSERT INTO oauth_attempts
+           (id, state_hash, tenant_id, user_id, connection_id, session_binding, redirect_uri,
+            job_id, lease_generation, expires_at, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM threads_connections
+           WHERE id = ? AND tenant_id = ? AND connection_mode = 'meta_oauth'
+             AND status NOT IN ('revoking', 'revoked')
+         ) AND EXISTS (
+           SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+         )`,
+      )
+      .bind(
+        `oat_${this.#idFactory()}`,
+        attempt.stateHash,
+        tenant.tenantId,
+        tenant.userId,
+        attempt.connectionId,
+        attempt.sessionBinding,
+        attempt.redirectUri,
+        attempt.jobId,
+        attempt.leaseGeneration,
+        attempt.expiresAt,
+        this.#now().toISOString(),
+        attempt.connectionId,
+        tenant.tenantId,
+        tenant.tenantId,
+        tenant.userId,
+      )
+      .run();
+    if (result.meta.changes !== 1) throw new TenantAuthorizationError();
+  }
+
+  async consumeOAuthAttempt(
+    tenant: TenantContext,
+    stateHash: string,
+    sessionBinding: string,
+  ): Promise<OAuthAttemptRecord | undefined> {
+    const now = this.#now().toISOString();
+    const row = await this.#db
+      .prepare(
+        `UPDATE oauth_attempts
+         SET consumed_at = ?
+         WHERE state_hash = ? AND tenant_id = ? AND user_id = ? AND session_binding = ?
+           AND consumed_at IS NULL AND expires_at > ?
+           AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )
+         RETURNING connection_id, redirect_uri, job_id, lease_generation`,
+      )
+      .bind(
+        now,
+        stateHash,
+        tenant.tenantId,
+        tenant.userId,
+        sessionBinding,
+        now,
+        tenant.tenantId,
+        tenant.userId,
+      )
+      .first<OAuthAttemptRow>();
+    return row
+      ? {
+          connectionId: row.connection_id,
+          redirectUri: row.redirect_uri,
+          jobId: row.job_id,
+          leaseGeneration: row.lease_generation,
+        }
+      : undefined;
+  }
+
+  async stageOAuthIdentity(
+    tenant: TenantContext,
+    connectionId: string,
+    platformUserId: string,
+    username: string,
+  ): Promise<ThreadsConnectionRecord> {
+    const now = this.#now().toISOString();
+    const result = await this.#db
+      .prepare(
+        `UPDATE threads_connections
+         SET platform_user_id = ?, protected_username = ?,
+             status = 'awaiting_identity_confirmation', last_verified_at = ?
+         WHERE id = ? AND tenant_id = ? AND connection_mode = 'meta_oauth'
+           AND status NOT IN ('revoking', 'revoked')
+           AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )`,
+      )
+      .bind(
+        platformUserId,
+        username,
+        now,
+        connectionId,
+        tenant.tenantId,
+        tenant.tenantId,
+        tenant.userId,
+      )
+      .run();
+    if (result.meta.changes !== 1) throw new TenantAuthorizationError();
+    const connection = await this.getConnection(tenant, connectionId);
+    if (!connection) throw new TenantAuthorizationError();
+    return connection;
+  }
+
+  async confirmOAuthIdentity(
+    tenant: TenantContext,
+    connectionId: string,
+    expectedUsername: string,
+  ): Promise<ThreadsConnectionRecord | undefined> {
+    const now = this.#now().toISOString();
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE threads_connections
+           SET status = 'connected', last_verified_at = ?
+           WHERE id = ? AND tenant_id = ? AND status = 'awaiting_identity_confirmation'
+             AND platform_user_id IS NOT NULL AND protected_username = ?
+             AND EXISTS (
+               SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+             )`,
+        )
+        .bind(
+          now,
+          connectionId,
+          tenant.tenantId,
+          expectedUsername,
+          tenant.tenantId,
+          tenant.userId,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, 'connection.identity_confirmed', ?, '{}', ?
+           WHERE EXISTS (
+             SELECT 1 FROM threads_connections
+             WHERE id = ? AND tenant_id = ? AND status = 'connected'
+           )`,
+        )
+        .bind(
+          `aud_${this.#idFactory()}`,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          expectedUsername,
+          now,
+          connectionId,
+          tenant.tenantId,
+        ),
+    ]);
+    if (results[0].meta.changes !== 1) return undefined;
+    return this.getConnection(tenant, connectionId);
   }
 
   async addCandidate(

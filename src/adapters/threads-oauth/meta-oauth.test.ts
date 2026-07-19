@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { MetaThreadsOAuthClient } from './meta-oauth';
+import { buildMetaThreadsAuthorizationUrl, MetaThreadsOAuthClient } from './meta-oauth';
 import { OAuthProviderError } from './types';
 
 function jsonResponse(value: unknown, status = 200) {
@@ -11,6 +11,25 @@ function jsonResponse(value: unknown, status = 200) {
 }
 
 describe('MetaThreadsOAuthClient', () => {
+  it('builds the documented authorization request with mandatory application state', () => {
+    const url = new URL(
+      buildMetaThreadsAuthorizationUrl(
+        'app-id',
+        'https://guard.example/auth/threads/callback',
+        'single-use-state',
+      ),
+    );
+
+    expect(url.origin + url.pathname).toBe('https://threads.com/oauth/authorize');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      client_id: 'app-id',
+      redirect_uri: 'https://guard.example/auth/threads/callback',
+      scope: 'threads_basic,threads_profile_discovery',
+      response_type: 'code',
+      state: 'single-use-state',
+    });
+  });
+
   it('exchanges a code, upgrades the token and confirms the exact Threads identity', async () => {
     const fetcher = vi
       .fn()

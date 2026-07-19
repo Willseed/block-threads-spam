@@ -19,6 +19,7 @@ export interface AppBindings {
   META_GRAPH_API_VERSION?: string;
   REAUTH_MAX_AGE_SECONDS?: string;
   SESSION_ENCRYPTION_KEY?: string;
+  COORDINATOR_NAMESPACE_KEY?: string;
 }
 
 export interface AppVariables {

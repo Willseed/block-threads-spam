@@ -8,6 +8,10 @@ export default defineConfig({
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations('./migrations'),
           SESSION_ENCRYPTION_KEY: 'ERERERERERERERERERERERERERERERERERERERERERE',
+          COORDINATOR_NAMESPACE_KEY: 'test-only-coordinator-namespace-key-material',
+          APP_ORIGIN: 'https://guard.example',
+          META_APP_ID: 'test-meta-app-id',
+          META_APP_SECRET: 'test-meta-app-secret',
         },
         d1Databases: ['DB'],
         r2Buckets: ['EVIDENCE'],

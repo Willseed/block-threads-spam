@@ -49,11 +49,12 @@ describe('CloudflareAccessVerifier', () => {
       }),
     );
 
-    expect(identity).toEqual({
+    expect(identity).toMatchObject({
       subject: 'immutable-user-id',
       email: 'owner@example.com',
       authenticatedAt: '2026-07-19T06:46:40.000Z',
     });
+    expect(identity.sessionBinding).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it('rejects a correctly signed token for another Access application', async () => {

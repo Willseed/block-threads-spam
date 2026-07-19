@@ -19,6 +19,7 @@
       "POLICY_AUD",
       "APP_ORIGIN",
       "SESSION_ENCRYPTION_KEY",
+      "COORDINATOR_NAMESPACE_KEY",
       "META_APP_ID",
       "META_APP_SECRET"
     ]
