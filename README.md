@@ -56,6 +56,10 @@ npx wrangler d1 migrations apply <database-name> --remote
 人工候選端點只接受一個完整、合法的 Threads username；不提供搜尋字串、萬用字元或批次輸入。
 產生端點只接受規則白名單、單規則配額與總配額；正式帳號一律從該 tenant 的 connection 記錄讀取。
 
+## Threads 個人檔案查詢
+
+候選存在性與公開摘要採官方 `GET /profile_lookup?username=...` adapter，所需權限為 `threads_profile_discovery`。Adapter 只查一個已驗證的完整 username，並將 provider 結果縮減成 allowlist 欄位。權限不足、限流、回應格式變更或 target 不一致都會回傳明確的不可用分類；production 預設 adapter 不會降級成 Threads 網頁爬取。
+
 ## 安全邊界
 
 - Threads 密碼、雙重驗證碼、Cookie 或 Session 檔不會由應用表單收集。
