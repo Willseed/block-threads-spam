@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 
+import { generateCandidateVariants, VARIANT_RULES } from '../../domain/candidates';
 import { parseUsername } from '../../domain/usernames';
 import {
   CandidateAlreadyExistsError,
@@ -15,6 +16,12 @@ const connectionInput = z.object({
 
 const candidateInput = z.object({
   username: z.string().min(1).max(31),
+});
+
+const generationInput = z.object({
+  enabledRules: z.array(z.enum(VARIANT_RULES)).max(VARIANT_RULES.length).optional(),
+  totalLimit: z.number().int().min(1).max(100).default(80),
+  perRuleLimit: z.number().int().min(1).max(20).default(12),
 });
 
 function validationError() {
@@ -97,4 +104,46 @@ connectionRoutes.post('/:connectionId/candidates', async (context) => {
     }
     throw error;
   }
+});
+
+connectionRoutes.post('/:connectionId/candidates/generate', async (context) => {
+  const body: unknown = await context.req.json().catch(() => ({}));
+  const parsed = generationInput.safeParse(body);
+  if (!parsed.success) return context.json(validationError(), 400);
+
+  const tenant = context.get('tenant');
+  const repository = context.get('repository');
+  const connectionId = context.req.param('connectionId');
+  const connection = await repository.getConnection(tenant, connectionId);
+  if (!connection || connection.status === 'revoked') {
+    return context.json(
+      { error: { code: 'not_found', message: '找不到指定的 Threads 連線。' } },
+      404,
+    );
+  }
+
+  const variants = generateCandidateVariants(connection.protectedUsername, parsed.data);
+  const created = await repository.addGeneratedCandidates(
+    tenant,
+    connectionId,
+    variants.map((variant) => ({
+      username: variant.username,
+      sourceType: 'generated',
+      sourceRules: variant.rules,
+      reasons: variant.reasons,
+    })),
+  );
+  const candidates = await repository.listCandidates(tenant, connectionId);
+
+  return context.json({
+    snapshot: {
+      generated: variants.length,
+      created,
+      limits: {
+        total: parsed.data.totalLimit,
+        perRule: parsed.data.perRuleLimit,
+      },
+    },
+    candidates,
+  });
 });

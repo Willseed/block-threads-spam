@@ -51,8 +51,10 @@ npx wrangler d1 migrations apply <database-name> --remote
 - `GET /api/me`
 - `GET|POST /api/connections`
 - `GET|POST /api/connections/:connectionId/candidates`
+- `POST /api/connections/:connectionId/candidates/generate`
 
 人工候選端點只接受一個完整、合法的 Threads username；不提供搜尋字串、萬用字元或批次輸入。
+產生端點只接受規則白名單、單規則配額與總配額；正式帳號一律從該 tenant 的 connection 記錄讀取。
 
 ## 安全邊界
 

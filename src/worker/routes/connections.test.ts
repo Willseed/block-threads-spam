@@ -120,4 +120,52 @@ describe('connection and manual candidate API', () => {
       (await app.request(`/api/connections/${connection.id}/candidates`, request, env)).status,
     ).toBe(409);
   });
+
+  it('generates a bounded server-side candidate snapshot idempotently', async () => {
+    const connection = await createConnection();
+    const app = applicationFor('idp|owner');
+    const request = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        enabledRules: ['punctuation'],
+        totalLimit: 5,
+        perRuleLimit: 5,
+      }),
+    };
+
+    const first = await app.request(
+      `/api/connections/${connection.id}/candidates/generate`,
+      request,
+      env,
+    );
+    expect(first.status).toBe(200);
+    await expect(first.json()).resolves.toMatchObject({
+      snapshot: { generated: 5, created: 5, limits: { total: 5, perRule: 5 } },
+    });
+
+    const second = await app.request(
+      `/api/connections/${connection.id}/candidates/generate`,
+      request,
+      env,
+    );
+    await expect(second.json()).resolves.toMatchObject({
+      snapshot: { generated: 5, created: 0 },
+    });
+  });
+
+  it('refuses to generate against another tenant connection', async () => {
+    const connection = await createConnection('idp|owner');
+    const response = await applicationFor('idp|attacker').request(
+      `/api/connections/${connection.id}/candidates/generate`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      },
+      env,
+    );
+
+    expect(response.status).toBe(404);
+  });
 });

@@ -56,12 +56,21 @@ export interface ApplicationRepository {
     connectionMode: ThreadsConnectionRecord['connectionMode'],
   ): Promise<ThreadsConnectionRecord>;
   listConnections(tenant: TenantContext): Promise<ThreadsConnectionRecord[]>;
+  getConnection(
+    tenant: TenantContext,
+    connectionId: string,
+  ): Promise<ThreadsConnectionRecord | undefined>;
   addCandidate(
     tenant: TenantContext,
     connectionId: string,
     candidate: NewCandidate,
   ): Promise<CandidateRecord>;
   listCandidates(tenant: TenantContext, connectionId: string): Promise<CandidateRecord[]>;
+  addGeneratedCandidates(
+    tenant: TenantContext,
+    connectionId: string,
+    candidates: readonly NewCandidate[],
+  ): Promise<number>;
 }
 
 interface RepositoryOptions {
@@ -268,6 +277,25 @@ export class D1Repository implements ApplicationRepository {
     return results.map(connectionRecord);
   }
 
+  async getConnection(
+    tenant: TenantContext,
+    connectionId: string,
+  ): Promise<ThreadsConnectionRecord | undefined> {
+    const row = await this.#db
+      .prepare(
+        `SELECT id, protected_username, connection_mode, status, created_at
+         FROM threads_connections
+         WHERE id = ? AND tenant_id = ?
+           AND EXISTS (
+             SELECT 1 FROM memberships
+             WHERE tenant_id = ? AND user_id = ?
+           )`,
+      )
+      .bind(connectionId, tenant.tenantId, tenant.tenantId, tenant.userId)
+      .first<ConnectionRow>();
+    return row ? connectionRecord(row) : undefined;
+  }
+
   async addCandidate(
     tenant: TenantContext,
     connectionId: string,
@@ -370,5 +398,67 @@ export class D1Repository implements ApplicationRepository {
       .bind(tenant.tenantId, connectionId, tenant.tenantId, tenant.userId)
       .all<CandidateRow>();
     return results.map(candidateRecord);
+  }
+
+  async addGeneratedCandidates(
+    tenant: TenantContext,
+    connectionId: string,
+    candidates: readonly NewCandidate[],
+  ): Promise<number> {
+    if (candidates.length === 0) return 0;
+    if (candidates.length > 100) throw new RangeError('A candidate snapshot cannot exceed 100');
+    if (!(await this.getConnection(tenant, connectionId))) throw new TenantAuthorizationError();
+
+    const now = this.#now().toISOString();
+    const statements: D1PreparedStatement[] = [];
+    for (const candidate of candidates) {
+      const id = `can_${this.#idFactory()}`;
+      const normalizedUsername = candidate.username.toLocaleLowerCase('en-US');
+      statements.push(
+        this.#db
+          .prepare(
+            `INSERT INTO candidates
+               (id, tenant_id, connection_id, username, normalized_username, source_type,
+                source_rules_json, reasons_json, status, priority, first_seen_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+             ON CONFLICT(connection_id, normalized_username) DO NOTHING`,
+          )
+          .bind(
+            id,
+            tenant.tenantId,
+            connectionId,
+            candidate.username,
+            normalizedUsername,
+            candidate.sourceType,
+            JSON.stringify(candidate.sourceRules),
+            JSON.stringify(candidate.reasons),
+            candidate.priority ?? 'low',
+            now,
+          ),
+        this.#db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, tenant_id, actor_user_id, connection_id, event_type, target_ref, metadata_json, created_at)
+             SELECT ?, ?, ?, ?, 'candidate.generated', ?, '{}', ?
+             WHERE EXISTS (SELECT 1 FROM candidates WHERE id = ? AND tenant_id = ?)`,
+          )
+          .bind(
+            `aud_${this.#idFactory()}`,
+            tenant.tenantId,
+            tenant.userId,
+            connectionId,
+            normalizedUsername,
+            now,
+            id,
+            tenant.tenantId,
+          ),
+      );
+    }
+
+    const results = await this.#db.batch(statements);
+    return results.reduce(
+      (created, result, index) => created + (index % 2 === 0 ? result.meta.changes : 0),
+      0,
+    );
   }
 }
