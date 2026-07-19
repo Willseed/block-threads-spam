@@ -14,7 +14,8 @@ import { FailClosedBrowserHandoffProvider } from '../adapters/browser-handoff/fa
 import { createHandoffRoutes } from './routes/handoffs';
 import { requireTenant } from './tenant/middleware';
 import type { RepositoryFactory } from './tenant/middleware';
-import { runRetentionCleanup, runScheduledScans } from './scheduled';
+import { rateLimitSensitiveActions } from './security/rate-limit';
+import { runMaintenance, runScheduledScans } from './scheduled';
 
 export interface AppDependencies {
   identityVerifier?: IdentityVerifier;
@@ -40,6 +41,7 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   application.use('/api/*', requireIdentity(dependencies.identityVerifier));
   application.use('/api/*', requireTenant(dependencies.repositoryFactory));
+  application.use('/api/*', rateLimitSensitiveActions);
   application.use('/auth/*', requireIdentity(dependencies.identityVerifier));
   application.use('/auth/*', requireTenant(dependencies.repositoryFactory));
 
@@ -102,7 +104,7 @@ const worker: ExportedHandler<AppEnvironment['Bindings']> = {
   fetch: app.fetch,
   scheduled(_controller, bindings, executionContext) {
     executionContext.waitUntil(
-      Promise.all([runRetentionCleanup(bindings), runScheduledScans(bindings)]),
+      Promise.all([runMaintenance(bindings), runScheduledScans(bindings)]),
     );
   },
 };

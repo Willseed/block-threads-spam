@@ -1,6 +1,7 @@
 import { assessProfileSimilarity } from '../domain/similarity';
 import { D1Repository } from '../platform/d1/repository';
 import { SchedulerRepository } from '../platform/d1/scheduler-repository';
+import { D1RateLimiter } from '../platform/d1/rate-limiter';
 import { R2EvidenceRepository } from '../platform/r2/evidence-repository';
 import { connectionCoordinator } from './coordinator';
 import type { AppBindings } from './environment';
@@ -79,7 +80,11 @@ export async function runScheduledScans(bindings: AppBindings): Promise<number> 
   return completed;
 }
 
-export async function runRetentionCleanup(bindings: AppBindings): Promise<number> {
+export async function runMaintenance(bindings: AppBindings): Promise<number> {
   const evidence = new R2EvidenceRepository(bindings.DB, bindings.EVIDENCE);
-  return evidence.purgeExpired(100);
+  const [evidenceCount, rateLimitCount] = await Promise.all([
+    evidence.purgeExpired(100),
+    new D1RateLimiter(bindings.DB).purgeExpired(1000),
+  ]);
+  return evidenceCount + rateLimitCount;
 }
