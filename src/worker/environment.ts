@@ -3,6 +3,7 @@ import type { ApplicationRepository, TenantContext } from '../platform/d1/reposi
 
 export interface AppBindings {
   DB: D1Database;
+  EVIDENCE: R2Bucket;
   POLICY_AUD?: string;
   TEAM_DOMAIN?: string;
 }

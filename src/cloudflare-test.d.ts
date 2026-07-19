@@ -6,6 +6,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       DB: D1Database;
+      EVIDENCE: R2Bucket;
       TEST_MIGRATIONS: TestD1Migrations;
     }
   }

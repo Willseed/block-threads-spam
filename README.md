@@ -60,6 +60,10 @@ npx wrangler d1 migrations apply <database-name> --remote
 
 候選存在性與公開摘要採官方 `GET /profile_lookup?username=...` adapter，所需權限為 `threads_profile_discovery`。Adapter 只查一個已驗證的完整 username，並將 provider 結果縮減成 allowlist 欄位。權限不足、限流、回應格式變更或 target 不一致都會回傳明確的不可用分類；production 預設 adapter 不會降級成 Threads 網頁爬取。
 
+## 私有證據
+
+R2 bucket 綁定名稱為 `EVIDENCE`，不可啟用 public `r2.dev` 網址。證據限定 5 MiB 與 allowlist MIME，寫入時計算 SHA-256 並使用不可預測 key；D1 只保存索引。讀取與刪除每次都重新驗證 tenant membership，刪除後保留最小 tombstone 與稽核，不回傳任何 bucket public URL。
+
 ## 安全邊界
 
 - Threads 密碼、雙重驗證碼、Cookie 或 Session 檔不會由應用表單收集。

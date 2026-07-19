@@ -9,6 +9,7 @@ export default defineConfig({
           TEST_MIGRATIONS: await readD1Migrations('./migrations'),
         },
         d1Databases: ['DB'],
+        r2Buckets: ['EVIDENCE'],
       },
       wrangler: { configPath: './wrangler.jsonc' },
     })),
