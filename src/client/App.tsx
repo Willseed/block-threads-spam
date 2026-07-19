@@ -10,7 +10,14 @@ import {
 } from 'react-router-dom';
 
 import { api, ApiError } from './api';
-import type { ActivityEvent, Candidate, Connection, Identity, SchedulePreference } from './api';
+import type {
+  ActivityEvent,
+  Candidate,
+  Capabilities,
+  Connection,
+  Identity,
+  SchedulePreference,
+} from './api';
 
 const STATUS_LABELS: Record<Connection['status'], string> = {
   awaiting_identity_confirmation: '等待確認',
@@ -167,15 +174,30 @@ function Dashboard({ connections, candidates }: { connections: Connection[]; can
 function CandidateList({
   connection,
   candidates,
+  canManualHandoff,
   onRefresh,
 }: {
   connection?: Connection;
   candidates: Candidate[];
+  canManualHandoff: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const [username, setUsername] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [pendingHandoff, setPendingHandoff] = useState<{
+    id: string;
+    exactTargetUsername: string;
+  } | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const value = window.sessionStorage.getItem('pending-block-handoff');
+    if (!value) return null;
+    try {
+      return JSON.parse(value) as { id: string; exactTargetUsername: string };
+    } catch {
+      return null;
+    }
+  });
 
   async function generate() {
     if (!connection) return;
@@ -245,6 +267,59 @@ function CandidateList({
     }
   }
 
+  async function startBlockHandoff(candidate: Candidate) {
+    if (
+      !connection ||
+      !window.confirm(
+        `即將開啟人工操作，只核准目標 @${candidate.username}。這不是自動封鎖，且結果不明時不會重試。是否繼續？`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const issued = await api.issueApproval(connection.id, candidate.id, candidate.username);
+      const started = await api.startHandoff(issued.approval.id, issued.actionToken);
+      const pending = {
+        id: started.handoff.id,
+        exactTargetUsername: started.handoff.exactTargetUsername,
+      };
+      window.sessionStorage.setItem('pending-block-handoff', JSON.stringify(pending));
+      setPendingHandoff(pending);
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = started.handoff.enterPath;
+      form.hidden = true;
+      document.documentElement.appendChild(form);
+      form.submit();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '無法建立安全人工交接。');
+      setBusy(false);
+    }
+  }
+
+  async function completeHandoff() {
+    if (!pendingHandoff) return;
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const { result } = await api.completeHandoff(pendingHandoff.id);
+      window.sessionStorage.removeItem('pending-block-handoff');
+      setPendingHandoff(null);
+      setMessage(
+        result.status === 'confirmed_success'
+          ? `已確認 @${result.exactTargetUsername} 的人工操作結果。`
+          : `@${result.exactTargetUsername} 的結果不明，已停止且不會重試，請人工複查。`,
+      );
+      await onRefresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '無法驗證人工操作結果。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Review queue" title="候選帳號">
@@ -278,6 +353,22 @@ function CandidateList({
               <button className="button secondary" disabled={busy} type="submit">加入</button>
             </div>
           </form>
+          {pendingHandoff ? (
+            <section className="panel handoff-return" role="status">
+              <div>
+                <strong>人工操作：@{pendingHandoff.exactTargetUsername}</strong>
+                <small>完成 Live View 後回到這裡，只會驗證結果，不會再次執行。</small>
+              </div>
+              <button
+                className="button primary"
+                type="button"
+                disabled={busy}
+                onClick={() => void completeHandoff()}
+              >
+                已完成，驗證結果
+              </button>
+            </section>
+          ) : null}
           {message ? <p className="notice" role="status">{message}</p> : null}
           {candidates.length === 0 ? (
             <EmptyState title="目前沒有候選" body="你可以產生受限變形，或人工加入一個已知完整帳號。" />
@@ -328,14 +419,26 @@ function CandidateList({
                           </button>
                         ) : null}
                         {['pending_review', 'watching'].includes(candidate.status) ? (
-                          <button
-                            className="button ghost"
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void decide(candidate.id, 'ignore')}
-                          >
-                            忽略
-                          </button>
+                          <>
+                            <button
+                              className="button ghost"
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void decide(candidate.id, 'ignore')}
+                            >
+                              忽略
+                            </button>
+                            {canManualHandoff ? (
+                              <button
+                                className="button danger"
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void startBlockHandoff(candidate)}
+                              >
+                                人工封鎖此帳號
+                              </button>
+                            ) : null}
+                          </>
                         ) : null}
                       </>
                     ) : (
@@ -600,6 +703,11 @@ function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [capabilities, setCapabilities] = useState<Capabilities>({
+    officialProfileLookup: false,
+    manualBlockHandoff: false,
+    automatedBlock: false,
+  });
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string>();
 
@@ -622,13 +730,15 @@ function App() {
     void (async () => {
       try {
         const verifiedIdentity = await api.identity();
-        const [connectionResult, activityResult] = await Promise.all([
+        const [connectionResult, activityResult, capabilityResult] = await Promise.all([
           api.connections(),
           api.activity(),
+          api.capabilities(),
         ]);
         setIdentity(verifiedIdentity);
         setConnections(connectionResult.connections);
         setActivity(activityResult.events);
+        setCapabilities(capabilityResult.capabilities);
         await refreshCandidates(connectionResult.connections[0]);
       } catch (error) {
         setFatalError(
@@ -672,7 +782,7 @@ function App() {
       <Layout identity={identity} connection={selectedConnection}>
         <Routes>
           <Route path="/" element={<Dashboard connections={connections} candidates={candidates} />} />
-          <Route path="/candidates" element={<CandidateList connection={selectedConnection} candidates={candidates} onRefresh={() => refreshCandidates(selectedConnection)} />} />
+          <Route path="/candidates" element={<CandidateList connection={selectedConnection} candidates={candidates} canManualHandoff={capabilities.manualBlockHandoff} onRefresh={() => refreshCandidates(selectedConnection)} />} />
           <Route path="/activity" element={<Activity events={activity} />} />
           <Route path="/connections" element={<Connections connections={connections} onCreated={connectionsChanged} />} />
           <Route path="/settings" element={<Settings connection={selectedConnection} />} />

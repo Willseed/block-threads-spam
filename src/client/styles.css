@@ -52,6 +52,7 @@ a { color: inherit; }
 .button.primary:hover:not(:disabled) { background: var(--accent-dark); }
 .button.secondary { border-color: var(--line); background: #fff; }
 .button.ghost { min-height: 2.25rem; color: var(--muted); background: transparent; }
+.button.danger { min-height: 2.25rem; color: #8b2f24; border-color: #d8a39a; background: #faece8; }
 .text-link { color: var(--accent-dark); font-size: .82rem; font-weight: 700; text-decoration: none; }
 .panel { border: 1px solid var(--line); border-radius: 1rem; background: rgb(248 248 243 / 86%); box-shadow: 0 1px 1px rgb(20 30 25 / 3%); }
 .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; overflow: hidden; border: 1px solid var(--line); border-radius: 1rem; background: var(--line); }
@@ -89,6 +90,9 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
 .candidate-main p { margin: .4rem 0; color: #55615a; font-size: .8rem; }
 .candidate-main small { color: #8a928d; font-size: .68rem; }
 .candidate-actions { display: flex; align-items: center; gap: .35rem; }
+.handoff-return { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 1rem 0; padding: 1rem; border-color: #d8a39a; background: #fff7f4; }
+.handoff-return div { display: grid; gap: .2rem; }
+.handoff-return small { color: var(--muted); }
 .priority { padding: .2rem .42rem; border-radius: 999px; font-size: .6rem; font-weight: 700; }
 .priority.low { color: #5e6b64; background: #e6e9e5; }
 .priority.medium { color: #8a641e; background: #f2e8c9; }

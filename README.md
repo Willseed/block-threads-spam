@@ -68,6 +68,8 @@ Browser Live View 目前仍是 Beta，且無法硬性鎖定單一 Threads userna
 
 使用者完成 Live View 人工操作後，只能呼叫 `POST /api/handoffs/:id/complete` 要求驗證；provider 介面沒有封鎖或重試方法。只有目標身分與 UI 都明確符合才記為 `confirmed_success`，其他情況一律把候選、批准與工作置為 `needs_review`，回傳 `unknown_needs_review`，同時關閉 browser session 並釋放帳號鎖。
 
+`GET /api/capabilities` 只在兩個 handoff feature flag 皆開啟且已注入可用 provider 時回報人工操作可用；`automatedBlock` 永遠為 `false`。前端只在這時顯示單一候選的人工封鎖按鈕，經一次性批准後用原生 POST form 進入 broker，不讀取 redirect capability；返回後只提供「驗證結果」，不提供重試捷徑。
+
 ## Threads 個人檔案查詢
 
 候選存在性與公開摘要採官方 `GET /profile_lookup?username=...` adapter，所需權限為 `threads_profile_discovery`。Adapter 只查一個已驗證的完整 username，並將 provider 結果縮減成 allowlist 欄位。權限不足、限流、回應格式變更或 target 不一致都會回傳明確的不可用分類；production 預設 adapter 不會降級成 Threads 網頁爬取。

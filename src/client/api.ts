@@ -48,6 +48,12 @@ export interface SchedulePreference {
   lastRunAt?: string;
 }
 
+export interface Capabilities {
+  officialProfileLookup: boolean;
+  manualBlockHandoff: boolean;
+  automatedBlock: false;
+}
+
 interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
@@ -79,6 +85,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   identity: () => request<Identity>('/api/me'),
+  capabilities: () => request<{ capabilities: Capabilities }>('/api/capabilities'),
   connections: () => request<{ connections: Connection[] }>('/api/connections'),
   createConnection: (protectedUsername: string) =>
     request<{ connection: Connection }>('/api/connections', {
@@ -135,4 +142,26 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ enabled, timezone }),
     }),
+  issueApproval: (connectionId: string, candidateId: string, exactTargetUsername: string) =>
+    request<{
+      approval: { id: string; expiresAt: string };
+      actionToken: string;
+    }>(`/api/connections/${connectionId}/candidates/${candidateId}/approvals`, {
+      method: 'POST',
+      body: JSON.stringify({ exactTargetUsername }),
+    }),
+  startHandoff: (approvalId: string, actionToken: string) =>
+    request<{
+      handoff: { id: string; enterPath: string; expiresAt: string; exactTargetUsername: string };
+    }>('/api/handoffs', {
+      method: 'POST',
+      body: JSON.stringify({ approvalId, actionToken }),
+    }),
+  completeHandoff: (handoffId: string) =>
+    request<{
+      result: {
+        status: 'confirmed_success' | 'unknown_needs_review';
+        exactTargetUsername: string;
+      };
+    }>(`/api/handoffs/${encodeURIComponent(handoffId)}/complete`, { method: 'POST' }),
 };

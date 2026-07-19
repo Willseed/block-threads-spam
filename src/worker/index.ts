@@ -10,6 +10,7 @@ import { evidenceRoutes } from './routes/evidence';
 import { oauthCallbackRoutes, oauthConnectionRoutes } from './routes/oauth';
 import type { OAuthClientFactory } from './routes/oauth';
 import type { BrowserHandoffProvider } from '../adapters/browser-handoff/types';
+import { FailClosedBrowserHandoffProvider } from '../adapters/browser-handoff/fail-closed';
 import { createHandoffRoutes } from './routes/handoffs';
 import { requireTenant } from './tenant/middleware';
 import type { RepositoryFactory } from './tenant/middleware';
@@ -24,6 +25,8 @@ export interface AppDependencies {
 
 export function createApp(dependencies: AppDependencies = {}) {
   const application = new Hono<AppEnvironment>();
+  const browserHandoffProvider =
+    dependencies.browserHandoffProvider ?? new FailClosedBrowserHandoffProvider();
 
   application.use('/api/*', secureHeaders());
   application.use('/auth/*', secureHeaders());
@@ -49,6 +52,19 @@ export function createApp(dependencies: AppDependencies = {}) {
     });
   });
 
+  application.get('/api/capabilities', (context) =>
+    context.json({
+      capabilities: {
+        officialProfileLookup: context.env.FEATURE_META_PROFILE_LOOKUP === 'true',
+        manualBlockHandoff:
+          context.env.FEATURE_MANUAL_BLOCK_HANDOFF === 'true' &&
+          context.env.FEATURE_BROWSER_LIVE_VIEW === 'true' &&
+          browserHandoffProvider.isAvailable(),
+        automatedBlock: false,
+      },
+    }),
+  );
+
   application.route('/api/connections', connectionRoutes);
   application.route(
     '/api/connections',
@@ -58,7 +74,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   application.route('/api/activity', activityRoutes);
   application.route(
     '/api/handoffs',
-    createHandoffRoutes(dependencies.browserHandoffProvider),
+    createHandoffRoutes(browserHandoffProvider),
   );
   application.route('/auth/threads', oauthCallbackRoutes(dependencies.oauthClientFactory));
 

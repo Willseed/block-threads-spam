@@ -58,4 +58,16 @@ describe('application identity', () => {
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toContain('application/json');
   });
+
+  it('reports destructive capabilities as disabled with the production provider', async () => {
+    const verifier: IdentityVerifier = {
+      verify: () => Promise.resolve({ subject: 'user-id' }),
+    };
+    const protectedApp = createApp({ identityVerifier: verifier });
+    const response = await protectedApp.request('/api/capabilities', undefined, env);
+
+    await expect(response.json()).resolves.toMatchObject({
+      capabilities: { manualBlockHandoff: false, automatedBlock: false },
+    });
+  });
 });
