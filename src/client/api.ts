@@ -164,4 +164,9 @@ export const api = {
         exactTargetUsername: string;
       };
     }>(`/api/handoffs/${encodeURIComponent(handoffId)}/complete`, { method: 'POST' }),
+  revokeConnection: (connectionId: string, dataRetention: 'retain' | 'delete') =>
+    request<{ connection: Connection }>(`/api/connections/${connectionId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ dataRetention }),
+    }),
 };

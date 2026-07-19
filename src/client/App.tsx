@@ -636,7 +636,13 @@ function Activity({ events }: { events: ActivityEvent[] }) {
   );
 }
 
-function Settings({ connection }: { connection?: Connection }) {
+function Settings({
+  connection,
+  onConnectionChanged,
+}: {
+  connection?: Connection;
+  onConnectionChanged: () => Promise<void>;
+}) {
   const [schedule, setSchedule] = useState<SchedulePreference>();
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -670,6 +676,26 @@ function Settings({ connection }: { connection?: Connection }) {
     }
   }
 
+  async function revokeConnection(dataRetention: 'retain' | 'delete') {
+    if (!connection) return;
+    const explanation =
+      dataRetention === 'delete'
+        ? '這會中斷 Threads 連線、刪除候選、快照與私有證據；撤銷稽核仍會保留。'
+        : '這會中斷 Threads 連線並刪除可再次使用的憑證；候選與歷史案件紀錄會保留。';
+    if (!window.confirm(`${explanation}\n\n確定要中斷 @${connection.protectedUsername}？`)) return;
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await api.revokeConnection(connection.id, dataRetention);
+      setMessage('Threads 連線已撤銷，所有新工作與排程都已停止。');
+      await onConnectionChanged();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '目前無法安全中斷連線。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Privacy controls" title="資料與設定" />
@@ -693,6 +719,29 @@ function Settings({ connection }: { connection?: Connection }) {
         </article>
         <article className="panel"><span>證據保留</span><h2>私有且可刪除</h2><p>R2 不提供公開網址；每次存取重新授權，超過保留期後清理。</p></article>
         <article className="panel"><span>平台動作</span><h2>逐一人工批准</h2><p>沒有全選封鎖；每個目標都需要最新證據、近期再驗證與一次性批准。</p></article>
+        <article className="panel revoke-card">
+          <span>中斷連線</span>
+          <h2>立即銷毀 Threads 憑證</h2>
+          <p>兩種選擇都會停止排程與工作；差別只在是否保留候選及案件證據。</p>
+          <div>
+            <button
+              className="button secondary"
+              type="button"
+              disabled={busy || !connection || connection.status === 'revoked'}
+              onClick={() => void revokeConnection('retain')}
+            >
+              中斷並保留紀錄
+            </button>
+            <button
+              className="button danger"
+              type="button"
+              disabled={busy || !connection || connection.status === 'revoked'}
+              onClick={() => void revokeConnection('delete')}
+            >
+              中斷並刪除資料
+            </button>
+          </div>
+        </article>
       </section>
     </>
   );
@@ -756,7 +805,8 @@ function App() {
 
   async function connectionsChanged() {
     const updated = await refreshConnections();
-    await refreshCandidates(updated[0]);
+    const nextConnection = updated.find(({ status }) => status !== 'revoked') ?? updated[0];
+    await refreshCandidates(nextConnection);
   }
 
   if (loading) {
@@ -775,7 +825,8 @@ function App() {
     );
   }
 
-  const selectedConnection = connections[0];
+  const selectedConnection =
+    connections.find(({ status }) => status !== 'revoked') ?? connections[0];
 
   return (
     <BrowserRouter>
@@ -785,7 +836,7 @@ function App() {
           <Route path="/candidates" element={<CandidateList connection={selectedConnection} candidates={candidates} canManualHandoff={capabilities.manualBlockHandoff} onRefresh={() => refreshCandidates(selectedConnection)} />} />
           <Route path="/activity" element={<Activity events={activity} />} />
           <Route path="/connections" element={<Connections connections={connections} onCreated={connectionsChanged} />} />
-          <Route path="/settings" element={<Settings connection={selectedConnection} />} />
+          <Route path="/settings" element={<Settings connection={selectedConnection} onConnectionChanged={connectionsChanged} />} />
           <Route path="*" element={<Navigate replace to="/" />} />
         </Routes>
       </Layout>
