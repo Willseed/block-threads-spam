@@ -4,9 +4,13 @@ import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnvironment } from './environment';
 import { requireIdentity } from './identity/middleware';
 import type { IdentityVerifier } from './identity/types';
+import { connectionRoutes } from './routes/connections';
+import { requireTenant } from './tenant/middleware';
+import type { RepositoryFactory } from './tenant/middleware';
 
 export interface AppDependencies {
   identityVerifier?: IdentityVerifier;
+  repositoryFactory?: RepositoryFactory;
 }
 
 export function createApp(dependencies: AppDependencies = {}) {
@@ -22,6 +26,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   );
 
   application.use('/api/*', requireIdentity(dependencies.identityVerifier));
+  application.use('/api/*', requireTenant(dependencies.repositoryFactory));
 
   application.get('/api/me', (context) => {
     const identity = context.get('identity');
@@ -31,6 +36,8 @@ export function createApp(dependencies: AppDependencies = {}) {
       ...(identity.authenticatedAt ? { authenticatedAt: identity.authenticatedAt } : {}),
     });
   });
+
+  application.route('/api/connections', connectionRoutes);
 
   application.notFound((context) => {
     if (context.req.path.startsWith('/api/')) {

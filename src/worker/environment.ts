@@ -1,4 +1,5 @@
 import type { AppIdentity } from './identity/types';
+import type { ApplicationRepository, TenantContext } from '../platform/d1/repository';
 
 export interface AppBindings {
   DB: D1Database;
@@ -8,6 +9,8 @@ export interface AppBindings {
 
 export interface AppVariables {
   identity: AppIdentity;
+  repository: ApplicationRepository;
+  tenant: TenantContext;
 }
 
 export interface AppEnvironment {

@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
 import { app, createApp } from './index';
@@ -36,7 +37,7 @@ describe('application identity', () => {
     };
     const protectedApp = createApp({ identityVerifier: verifier });
 
-    const response = await protectedApp.request('/api/me');
+    const response = await protectedApp.request('/api/me', undefined, env);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -52,7 +53,7 @@ describe('application identity', () => {
     };
     const protectedApp = createApp({ identityVerifier: verifier });
 
-    const response = await protectedApp.request('/api/unknown');
+    const response = await protectedApp.request('/api/unknown', undefined, env);
 
     expect(response.status).toBe(404);
     expect(response.headers.get('content-type')).toContain('application/json');

@@ -48,6 +48,22 @@ export interface NewCandidate {
   priority?: CandidateRecord['priority'];
 }
 
+export interface ApplicationRepository {
+  ensurePersonalTenant(identity: AppIdentity): Promise<TenantContext>;
+  createConnection(
+    tenant: TenantContext,
+    protectedUsername: string,
+    connectionMode: ThreadsConnectionRecord['connectionMode'],
+  ): Promise<ThreadsConnectionRecord>;
+  listConnections(tenant: TenantContext): Promise<ThreadsConnectionRecord[]>;
+  addCandidate(
+    tenant: TenantContext,
+    connectionId: string,
+    candidate: NewCandidate,
+  ): Promise<CandidateRecord>;
+  listCandidates(tenant: TenantContext, connectionId: string): Promise<CandidateRecord[]>;
+}
+
 interface RepositoryOptions {
   idFactory?: () => string;
   now?: () => Date;
@@ -84,6 +100,13 @@ export class TenantAuthorizationError extends Error {
   }
 }
 
+export class CandidateAlreadyExistsError extends Error {
+  constructor() {
+    super('Candidate already exists');
+    this.name = 'CandidateAlreadyExistsError';
+  }
+}
+
 function parseStringArray(value: string): string[] {
   const parsed: unknown = JSON.parse(value);
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
@@ -115,7 +138,7 @@ function candidateRecord(row: CandidateRow): CandidateRecord {
   };
 }
 
-export class D1Repository {
+export class D1Repository implements ApplicationRepository {
   readonly #db: D1Database;
   readonly #idFactory: () => string;
   readonly #now: () => Date;
@@ -306,7 +329,17 @@ export class D1Repository {
         ),
     ]);
 
-    if (result[0].meta.changes !== 1) throw new TenantAuthorizationError();
+    if (result[0].meta.changes !== 1) {
+      const existing = await this.#db
+        .prepare(
+          `SELECT 1 FROM candidates
+           WHERE tenant_id = ? AND connection_id = ? AND normalized_username = ?`,
+        )
+        .bind(tenant.tenantId, connectionId, normalizedUsername)
+        .first();
+      if (existing) throw new CandidateAlreadyExistsError();
+      throw new TenantAuthorizationError();
+    }
     return {
       id,
       username: candidate.username,

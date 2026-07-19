@@ -6,10 +6,10 @@ import type { IdentityVerifier } from './types';
 
 export function requireIdentity(verifier?: IdentityVerifier) {
   return createMiddleware<AppEnvironment>(async (context, next) => {
+    let identity;
     try {
       const selectedVerifier = verifier ?? new CloudflareAccessVerifier(context.env);
-      context.set('identity', await selectedVerifier.verify(context.req.raw));
-      await next();
+      identity = await selectedVerifier.verify(context.req.raw);
     } catch {
       return context.json(
         {
@@ -21,5 +21,7 @@ export function requireIdentity(verifier?: IdentityVerifier) {
         401,
       );
     }
+    context.set('identity', identity);
+    await next();
   });
 }

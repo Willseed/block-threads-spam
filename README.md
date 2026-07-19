@@ -46,6 +46,14 @@ npx wrangler d1 migrations apply <database-name> --remote
 
 測試環境使用 Workers Vitest integration 建立隔離的本機 D1 並自動套用 migration，不依賴遠端資料庫。
 
+目前可用的 tenant-scoped API：
+
+- `GET /api/me`
+- `GET|POST /api/connections`
+- `GET|POST /api/connections/:connectionId/candidates`
+
+人工候選端點只接受一個完整、合法的 Threads username；不提供搜尋字串、萬用字元或批次輸入。
+
 ## 安全邊界
 
 - Threads 密碼、雙重驗證碼、Cookie 或 Session 檔不會由應用表單收集。
