@@ -46,6 +46,8 @@ npx wrangler d1 migrations apply <database-name> --remote
 
 測試環境使用 Workers Vitest integration 建立隔離的本機 D1 並自動套用 migration，不依賴遠端資料庫。
 
+Wrangler 設定使用 automatic provisioning：首次 deploy 時會為只宣告 binding 的 `DB` 與 `EVIDENCE` 建立遠端資源並回寫資源識別；repo 不保存假的 UUID。正式部署前仍需逐一設定 `secrets.required`，並保持所有外部平台 feature flag 預設為 `false`。
+
 目前可用的 tenant-scoped API：
 
 - `GET /api/me`

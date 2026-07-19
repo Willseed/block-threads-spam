@@ -3,6 +3,35 @@
   "name": "threads-variant-guard",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-07-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DEPLOY_ENV": "production",
+    "META_GRAPH_API_VERSION": "v1.0",
+    "FEATURE_META_PROFILE_LOOKUP": "false",
+    "FEATURE_BROWSER_LIVE_VIEW": "false",
+    "FEATURE_MANUAL_BLOCK_HANDOFF": "false",
+    "FEATURE_AUTOMATED_BLOCK": "false"
+  },
+  "secrets": {
+    "required": [
+      "TEAM_DOMAIN",
+      "POLICY_AUD",
+      "APP_ORIGIN",
+      "SESSION_ENCRYPTION_KEY",
+      "META_APP_ID",
+      "META_APP_SECRET"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "EVIDENCE"
+    }
+  ],
   "observability": {
     "enabled": true
   },
