@@ -1,5 +1,32 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call */
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
+import fs from 'node:fs';
+import process from 'node:process';
+import path from 'node:path';
+
+const testEnvDefaults = {
+  TEAM_DOMAIN: 'https://team-test.cloudflareaccess.com',
+  POLICY_AUD: 'test-policy-audit-audience',
+  APP_ORIGIN: 'https://guard.example',
+  SESSION_ENCRYPTION_KEY: 'ERERERERERERERERERERERERERERERERERERERERERE',
+  COORDINATOR_NAMESPACE_KEY: 'test-only-coordinator-namespace-key-material',
+  META_APP_ID: 'test-meta-app-id',
+  META_APP_SECRET: 'test-meta-app-secret',
+};
+
+const testEnv = process.env as Record<string, string | undefined>;
+
+for (const [key, value] of Object.entries(testEnvDefaults)) {
+  if (testEnv[key] === undefined) {
+    testEnv[key] = value;
+  }
+}
+
+const wranglerLogPath = path.join(process.cwd(), '.wrangler-vitest', 'logs', 'wrangler.log');
+testEnv.WRANGLER_LOG_PATH ??= wranglerLogPath;
+fs.mkdirSync(path.dirname(testEnv.WRANGLER_LOG_PATH), { recursive: true });
+testEnv.WRANGLER_WRITE_LOGS ??= '0';
 
 function testOutboundService(request: Request): Response {
   const url = new URL(request.url);
