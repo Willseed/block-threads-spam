@@ -38,7 +38,7 @@ export class CloudflareAccessVerifier implements IdentityVerifier {
   readonly #issuer: string;
   readonly #jwks: JWTVerifyGetKey;
 
-  constructor(bindings: AppBindings) {
+  constructor(bindings: Pick<AppBindings, 'POLICY_AUD' | 'TEAM_DOMAIN'>) {
     const teamDomain = parseTeamDomain(bindings.TEAM_DOMAIN);
     if (!bindings.POLICY_AUD) {
       throw new AuthenticationError('Identity provider is not configured');
