@@ -110,6 +110,11 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
 .connection-symbol { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border-radius: .7rem; color: white; background: var(--ink); }
 .connection-row small { display: block; margin-top: .25rem; color: var(--muted); }
 .status-pill { padding: .35rem .6rem; border-radius: 999px; color: #765125; background: #f0e4ca; font-size: .68rem; }
+.activity-list { display: grid; gap: .65rem; margin-top: 1rem; }
+.activity-row { display: flex; align-items: center; gap: .9rem; padding: .9rem 1rem; }
+.activity-row div { display: grid; gap: .2rem; }
+.activity-row small { color: var(--muted); }
+.activity-mark { color: var(--accent); font-size: 1.1rem; }
 .activity-intro { display: flex; align-items: flex-start; gap: 1.25rem; padding: 2rem; }
 .activity-intro h2 { margin: 0 0 .6rem; }
 .activity-intro p { max-width: 45rem; margin: 0; color: var(--muted); line-height: 1.75; }

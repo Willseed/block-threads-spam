@@ -94,6 +94,8 @@ Threads 長效 token 只保存在該連線的 Durable Object 內，使用隨機 
 
 React SPA 提供儀表板、候選帳號、活動紀錄、連線與設定五個主要區域。頁首固定顯示目前受保護帳號與連線狀態；候選頁只提供單一人工目標與有限規則快照，不提供全選或批次封鎖。
 
+`GET /api/activity` 最多回傳 100 筆目前 tenant 的最小稽核欄位；provider payload、內部 metadata、token、Cookie 與 Live View URL 一律不進入 API 回應。Web 活動頁預設載入最近 50 筆並以安全事件名稱呈現。
+
 ## 安全邊界
 
 - Threads 密碼、雙重驗證碼、Cookie 或 Session 檔不會由應用表單收集。

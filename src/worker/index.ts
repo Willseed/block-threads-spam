@@ -5,6 +5,7 @@ import type { AppEnvironment } from './environment';
 import { requireIdentity } from './identity/middleware';
 import type { IdentityVerifier } from './identity/types';
 import { connectionRoutes } from './routes/connections';
+import { activityRoutes } from './routes/activity';
 import { evidenceRoutes } from './routes/evidence';
 import { oauthCallbackRoutes, oauthConnectionRoutes } from './routes/oauth';
 import type { OAuthClientFactory } from './routes/oauth';
@@ -50,6 +51,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     oauthConnectionRoutes(dependencies.oauthClientFactory),
   );
   application.route('/api/evidence', evidenceRoutes);
+  application.route('/api/activity', activityRoutes);
   application.route('/auth/threads', oauthCallbackRoutes(dependencies.oauthClientFactory));
 
   application.notFound((context) => {

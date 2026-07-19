@@ -71,6 +71,14 @@ export interface IssuedApproval {
   expiresAt: string;
 }
 
+export interface AuditEventRecord {
+  id: string;
+  connectionId?: string;
+  eventType: string;
+  targetRef?: string;
+  createdAt: string;
+}
+
 export interface NewCandidate {
   username: string;
   sourceType: CandidateRecord['sourceType'];
@@ -159,6 +167,10 @@ export interface ApplicationRepository {
     nonceHash: string,
     expiresAt: string,
   ): Promise<IssuedApproval>;
+  listAuditEvents(
+    tenant: TenantContext,
+    options?: { connectionId?: string; limit?: number },
+  ): Promise<AuditEventRecord[]>;
   addGeneratedCandidates(
     tenant: TenantContext,
     connectionId: string,
@@ -192,6 +204,14 @@ interface OAuthAttemptRow {
   redirect_uri: string;
   job_id: string;
   lease_generation: number;
+}
+
+interface AuditEventRow {
+  id: string;
+  connection_id: string | null;
+  event_type: string;
+  target_ref: string | null;
+  created_at: string;
 }
 
 interface CandidateRow {
@@ -1127,6 +1147,53 @@ export class D1Repository implements ApplicationRepository {
       evidenceVersion: candidate.currentSnapshotId,
       expiresAt,
     };
+  }
+
+  async listAuditEvents(
+    tenant: TenantContext,
+    options: { connectionId?: string; limit?: number } = {},
+  ): Promise<AuditEventRecord[]> {
+    const limit = options.limit ?? 50;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new RangeError('Audit event limit must be between 1 and 100');
+    }
+    const statement = options.connectionId
+      ? this.#db
+          .prepare(
+            `SELECT id, connection_id, event_type, target_ref, created_at
+             FROM audit_events
+             WHERE tenant_id = ? AND connection_id = ?
+               AND EXISTS (
+                 SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+               )
+             ORDER BY created_at DESC, id DESC LIMIT ?`,
+          )
+          .bind(
+            tenant.tenantId,
+            options.connectionId,
+            tenant.tenantId,
+            tenant.userId,
+            limit,
+          )
+      : this.#db
+          .prepare(
+            `SELECT id, connection_id, event_type, target_ref, created_at
+             FROM audit_events
+             WHERE tenant_id = ?
+               AND EXISTS (
+                 SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+               )
+             ORDER BY created_at DESC, id DESC LIMIT ?`,
+          )
+          .bind(tenant.tenantId, tenant.tenantId, tenant.userId, limit);
+    const { results } = await statement.all<AuditEventRow>();
+    return results.map((row) => ({
+      id: row.id,
+      ...(row.connection_id ? { connectionId: row.connection_id } : {}),
+      eventType: row.event_type,
+      ...(row.target_ref ? { targetRef: row.target_ref } : {}),
+      createdAt: row.created_at,
+    }));
   }
 
   async addGeneratedCandidates(

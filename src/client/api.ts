@@ -29,6 +29,14 @@ export interface Candidate {
   firstSeenAt: string;
 }
 
+export interface ActivityEvent {
+  id: string;
+  connectionId?: string;
+  eventType: string;
+  targetRef?: string;
+  createdAt: string;
+}
+
 interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
@@ -93,4 +101,5 @@ export const api = {
         body: JSON.stringify({ action }),
       },
     ),
+  activity: () => request<{ events: ActivityEvent[] }>('/api/activity?limit=50'),
 };

@@ -10,7 +10,7 @@ import {
 } from 'react-router-dom';
 
 import { api, ApiError } from './api';
-import type { Candidate, Connection, Identity } from './api';
+import type { ActivityEvent, Candidate, Connection, Identity } from './api';
 
 const STATUS_LABELS: Record<Connection['status'], string> = {
   awaiting_identity_confirmation: '等待確認',
@@ -401,7 +401,21 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
   );
 }
 
-function Activity() {
+const EVENT_LABELS: Record<string, string> = {
+  'tenant.created': '安全工作區已建立',
+  'connection.created': 'Threads 連線草稿已建立',
+  'connection.identity_confirmed': 'Threads 帳號身分已確認',
+  'connection.revoked': 'Threads 連線已撤銷',
+  'candidate.added': '已人工加入候選',
+  'candidate.generated': '已產生有限候選',
+  'candidate.lookup_completed': '候選個人檔案已更新',
+  'candidate.decision': '候選審核決定已儲存',
+  'approval.issued': '單一目標批准已簽發',
+  'evidence.created': '私有證據已保存',
+  'evidence.deleted': '私有證據已刪除',
+};
+
+function Activity({ events }: { events: ActivityEvent[] }) {
   return (
     <>
       <PageHeader eyebrow="Audit trail" title="活動紀錄" />
@@ -412,6 +426,24 @@ function Activity() {
           <p>連線、候選決策、證據存取、批准與撤銷都會記錄內部識別與時間；不會記錄密碼、token、Cookie 或 Live View URL。</p>
         </div>
       </section>
+      {events.length === 0 ? (
+        <EmptyState title="尚無活動" body="建立連線或審核候選後，最小稽核會顯示在這裡。" />
+      ) : (
+        <section className="activity-list" aria-label="活動紀錄清單">
+          {events.map((event) => (
+            <article className="panel activity-row" key={event.id}>
+              <span className="activity-mark">≋</span>
+              <div>
+                <strong>{EVENT_LABELS[event.eventType] ?? '安全活動已記錄'}</strong>
+                <small>
+                  {event.targetRef ? `${event.targetRef} · ` : ''}
+                  {formatDate(event.createdAt)}
+                </small>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
     </>
   );
 }
@@ -433,6 +465,7 @@ function App() {
   const [identity, setIdentity] = useState<Identity>();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string>();
 
@@ -454,12 +487,14 @@ function App() {
   useEffect(() => {
     void (async () => {
       try {
-        const [verifiedIdentity, connectionResult] = await Promise.all([
-          api.identity(),
+        const verifiedIdentity = await api.identity();
+        const [connectionResult, activityResult] = await Promise.all([
           api.connections(),
+          api.activity(),
         ]);
         setIdentity(verifiedIdentity);
         setConnections(connectionResult.connections);
+        setActivity(activityResult.events);
         await refreshCandidates(connectionResult.connections[0]);
       } catch (error) {
         setFatalError(
@@ -504,7 +539,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Dashboard connections={connections} candidates={candidates} />} />
           <Route path="/candidates" element={<CandidateList connection={selectedConnection} candidates={candidates} onRefresh={() => refreshCandidates(selectedConnection)} />} />
-          <Route path="/activity" element={<Activity />} />
+          <Route path="/activity" element={<Activity events={activity} />} />
           <Route path="/connections" element={<Connections connections={connections} onCreated={connectionsChanged} />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate replace to="/" />} />
