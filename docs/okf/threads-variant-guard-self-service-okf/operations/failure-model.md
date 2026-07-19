@@ -36,11 +36,12 @@ timestamp: "2026-07-20T12:00:00+08:00"
 | D1 最終清理失敗 | token 與 R2 已不可用，保留最小 checkpoint | 刪除處理中 | Cron 冪等重試 D1；完成後只保留最小 receipt／tombstone |
 | receipt status code 無效或過期 | 不透露是否存在對應使用者 | 找不到或已過期 | Meta／使用者使用原 confirmation code；營運者不得搜尋回傳個資 |
 | GitHub 品質閘門失敗 | verify job 不具 `production` environment 或部署 secrets，deploy job 不啟動 | workflow 失敗 | 修復後重新執行完整閘門 |
-| Worker bootstrap 不存在 | `versions upload` 失敗，不套用 migration、不切換流量 | 部署前置條件未完成 | 只允許營運者一次性建立名稱精確相符、無 binding 的 Worker record；目前 `threads-variant-guard` bootstrap 已完成 |
-| runtime secrets file 建立或未啟用 version upload 失敗 | 不套用 migration、不切換 production 流量，禁止輸出 secret 值 | 部署未完成 | `always()` 移除暫存檔；確認既有 Worker record、automatic provisioning 與權限後由受保護 environment 重跑 |
+| Worker record 不存在 | `versions upload` 失敗，不套用 migration、不切換流量 | 部署前置條件未完成 | 只允許營運者一次性建立名稱精確相符的 Worker record；不要把 record 存在誤判為 DO bootstrap 已完成 |
+| 首次 `v1 new_sqlite_classes` 尚未建立 | 若先執行 `versions upload`，可能以 code `10211` 失敗且留下 partial D1／R2 | 部署前置條件未完成 | 不必刻意重現失敗；精確建立或重用 D1／R2、只補缺少的資源，以明確 binding 和停用 automatic provisioning 套用 D1 migrations，再用同 class／migration、無 secrets／assets／cron且預設 `503` 的 fail-closed bootstrap 執行一次正常 `wrangler deploy`，完成後立即以完整版本取代 |
+| runtime secrets file 建立或未啟用 version upload 失敗 | 不套用 migration、不切換 production 流量，禁止輸出 secret 值；已建立的遠端資源仍可能保留 | 部署未完成 | `always()` 移除暫存檔；查核既有 Worker、DO migration、D1／R2 partial state 與權限後，由受保護 environment 重跑，不盲目刪除資源 |
 | 未啟用 version 上傳成功但 D1 migration 失敗 | 不啟用新 version，現行 production version 維持服務 | 發布未完成 | 修復 migration 後由同一受保護 workflow 重跑；不得手動略過 migration 或直接啟用新 version |
 | D1 migration 成功但依 run-unique tag activation 失敗 | 新 schema 已套用，但新 version 不接收流量；保持既有 production version | 發布未完成 | 確認 migration 向後相容，修復 activation 後由同一受保護 workflow 安全重跑，並核對 SHA、run ID 與 run attempt 完整 tag |
-| custom domain 尚未掛載或 mapping 錯誤 | 不把 Worker dashboard 的 `—` 視為可對外服務，不設定 Meta callback 為已驗證 | 網址尚不可用或未指向本 Worker | 正式部署後掛載 `spam.buy2330.cc`，再驗證 TLS、Access 精確 bypass 與 callback reachability |
+| custom domain、TLS 或 Access mapping 錯誤 | 不能把 Worker version 成功視為公開路由與信任邊界皆正常 | 網址不可用、錯誤指向或保護範圍不正確 | 查核 `spam.buy2330.cc` Worker custom domain、TLS、主 hostname Access 與三個精確 lifecycle bypass；匿名 route matrix 必須符合預期 |
 | 新 version 啟用後健康檢查失敗 | 停止後續發布，標記需回復 | 部署異常 | 依已驗證 version 回復流量並保存 GitHub／Cloudflare 稽核；已套用 migration 依相容性策略處理 |
 
 # 失敗關閉順序

@@ -29,7 +29,7 @@ Cloudflare 的 GitHub Actions 指南要求非互動式 CI 提供 `CLOUDFLARE_API
 
 Workers Secrets 是加密的 runtime bindings。Cloudflare 文件支援宣告 `secrets.required`，以及在 deploy／version upload 時以 secrets file 或 bulk request 傳入。本服務在受保護 deploy job 中使用 runner 暫存目錄下權限 `0600` 的 secrets file 建立未啟用 version，並以 `always()` cleanup 移除；檔案權限、遮罩、不輸出內容與清理仍是本服務的責任。Cloudflare 部署 API Token 本身不是應用 runtime secret，不得加入 secrets file 或 Worker bindings。
 
-本次 Cloudflare 帳戶實測顯示，`versions upload` 可對既有 Worker 進行 staged upload 與 automatic provisioning，但不能建立全新的 Worker service record。因此已先在 dashboard 一次性建立無 binding 的 Hello World `threads-variant-guard`；後續 upload 可建立／綁定 `threads-variant-guard-db` 與 `threads-variant-guard-evidence`。這個 bootstrap 與 custom domain mapping 是不同外部狀態；dashboard 對該 Worker 顯示 custom domain `—` 時，不能宣稱 `spam.buy2330.cc` 已指向它。
+本次 Cloudflare 帳戶實測顯示，`versions upload` 可對既有 Worker 進行 staged upload 與 automatic provisioning，但不能建立全新的 Worker service record，也不能建立首次 `v1 new_sqlite_classes` Durable Object migration；即使同名 Hello World Worker 已存在，本次先嘗試 upload 仍以 code `10211` 失敗。該次失敗前已建立 D1／R2，說明 partial state 必須先查核並重用；可重現流程應精確建立或重用資源、只補缺少的目標，以明確 binding 和停用 automatic provisioning 套用 D1 migrations，再用同一 class／migration、無 runtime secrets／assets／cron且預設回應 `503` 的 fail-closed bootstrap 執行一次正常 `wrangler deploy`。code `10211` 不是新環境必須刻意重現的步驟。bootstrap 與 custom domain mapping 是不同外部狀態；完整版本取代 bootstrap 後，仍須獨立驗證 domain、TLS 與 Access route matrix。
 
 # Cloudflare Access 精確公開路徑
 

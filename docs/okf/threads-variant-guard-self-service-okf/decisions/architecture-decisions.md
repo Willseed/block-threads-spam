@@ -95,11 +95,11 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 # 決策十二：GitHub Actions 使用最小權限帳戶 token
 
-**決策**：部署使用限定單一 Cloudflare 帳戶及必要 Workers／D1／R2 操作的 API Token，不使用 Global API Key。無 secrets 的 verify job 先完成品質閘門；只有 `refs/heads/main` 可進入已設定 exact `main` 的 `production` environment。deploy job 以暫存 `0600` secrets file 上傳帶 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 的未啟用 version，成功套用 D1 migrations 後才依同一 workflow run tag 啟用，並無條件清除暫存檔。由於 staged upload 不能建立全新 Worker，dashboard 已一次性建立無 binding 的 `threads-variant-guard` Hello World Worker 作為 bootstrap。
+**決策**：部署使用限定單一 Cloudflare 帳戶及必要 Workers／D1／R2 操作的 API Token，不使用 Global API Key。無 secrets 的 verify job 先完成品質閘門；只有 `refs/heads/main` 可進入已設定 exact `main` 的 `production` environment。deploy job 以暫存 `0600` secrets file 上傳帶 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 的未啟用 version，成功完成 D1 migration check／apply 後才依同一 workflow run tag 啟用，並無條件清除暫存檔。首次 `v1 new_sqlite_classes` 不由 `versions upload` 建立；同名 Worker record 只滿足第一項前置條件。初始化應精確建立或重用 D1／R2、只補缺少的資源，以明確 binding、停用 automatic provisioning 套用 D1 migrations，再用同 class／migration、無 runtime secrets／assets／cron且預設 `503` 的 fail-closed bootstrap 執行一次正常 `wrangler deploy`，完成後立即由完整版本取代。
 
 **原因**：部署憑證與 Worker 執行期機密具有不同權限及生命週期；混用會讓程式漏洞擴張成 Cloudflare 帳戶管理權限。
 
-**後果**：需要管理 GitHub environment、token 輪替、部署權限清單、既有 Worker bootstrap、向後相容 migration 與 version activation 復原；Cloudflare API Token 不得出現在 `.dev.vars`、Worker bindings、secrets file、前端 bundle、log 或 artifact。migration 失敗時未啟用 version 不接收流量；activation 失敗時由同一受保護 workflow 依包含 SHA、run ID 與 run attempt 的唯一 tag 安全重跑。Custom domain 與 Access mapping 不由 bootstrap 自動完成，必須另外驗證。
+**後果**：需要管理 GitHub environment、token 輪替、部署權限清單、Worker record 與一次性 DO bootstrap、partial resource 查核、向後相容 migration 及 version activation 復原；Cloudflare API Token 不得出現在 `.dev.vars`、Worker bindings、secrets file、前端 bundle、log 或 artifact。本次先嘗試 `versions upload` 時以 code `10211` 失敗且留下 D1／R2，證明失敗狀態可能包含可重用資源；新環境不必刻意重現，且不得盲目重建或刪除。bootstrap 後的日常發布仍是 staged upload → D1 migration check／apply → run-unique tag promotion；migration 失敗時未啟用 version 不接收流量，activation 失敗時由同一受保護 workflow 安全重跑。Custom domain 與 Access mapping 不由 bootstrap 自動完成，必須另外驗證。
 
 # 決策十三：Meta lifecycle 採精確公開路徑與應用層簽章
 
