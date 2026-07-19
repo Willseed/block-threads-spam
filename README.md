@@ -23,6 +23,8 @@ npm run check
 
 `generateCandidateVariants` 只執行單步、受控的視覺字元、標點、編輯與前後綴變形。呼叫端必須設定或接受總量與每規則配額；輸出會保留規則及繁體中文理由，且不會包含正式帳號本身。
 
+`assessProfileSimilarity` 彙整使用者名稱、顯示名稱、頭像衍生分數、簡介與外部連結，輸出低／中／高「審核優先級」。分數只供排序，不能建立封鎖批准。
+
 ## 安全邊界
 
 - Threads 密碼、雙重驗證碼、Cookie 或 Session 檔不會由應用表單收集。
