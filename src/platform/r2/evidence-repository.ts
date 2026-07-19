@@ -131,6 +131,7 @@ export class R2EvidenceRepository {
         `SELECT 1
          FROM threads_connections
          WHERE id = ? AND tenant_id = ?
+           AND status NOT IN ('revoking', 'revoked')
            AND EXISTS (
              SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
            )
@@ -175,7 +176,9 @@ export class R2EvidenceRepository {
             `INSERT INTO evidence_objects
                (id, tenant_id, connection_id, candidate_id, job_id, evidence_type, r2_key,
                 sha256, content_type, byte_length, source, created_at, retention_until)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+             FROM threads_connections
+             WHERE id = ? AND tenant_id = ? AND status NOT IN ('revoking', 'revoked')`,
           )
           .bind(
             evidenceId,
@@ -191,13 +194,17 @@ export class R2EvidenceRepository {
             input.source,
             createdAt,
             retentionUntil,
+            input.connectionId,
+            tenant.tenantId,
           ),
         this.#db
           .prepare(
             `INSERT INTO audit_events
                (id, tenant_id, actor_user_id, connection_id, job_id, event_type,
                 target_ref, metadata_json, created_at)
-             VALUES (?, ?, ?, ?, ?, 'evidence.created', ?, ?, ?)`,
+             SELECT ?, ?, ?, ?, ?, 'evidence.created', ?, ?, ?
+             FROM evidence_objects
+             WHERE id = ? AND tenant_id = ?`,
           )
           .bind(
             `aud_${this.#idFactory()}`,
@@ -208,6 +215,8 @@ export class R2EvidenceRepository {
             evidenceId,
             JSON.stringify({ contentType: input.contentType, byteLength: bytes.byteLength }),
             createdAt,
+            evidenceId,
+            tenant.tenantId,
           ),
       ]);
       if (result[0].meta.changes !== 1) throw new EvidenceStorageError();

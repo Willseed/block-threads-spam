@@ -3,5 +3,6 @@ TEAM_DOMAIN=https://your-team.cloudflareaccess.com
 POLICY_AUD=replace-with-access-application-audience
 APP_ORIGIN=http://127.0.0.1:5173
 SESSION_ENCRYPTION_KEY=replace-with-32-byte-base64url-key
+COORDINATOR_NAMESPACE_KEY=replace-with-random-secret-at-least-32-bytes
 META_APP_ID=replace-with-meta-app-id
 META_APP_SECRET=replace-with-meta-app-secret

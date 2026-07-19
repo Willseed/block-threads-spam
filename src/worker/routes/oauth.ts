@@ -11,6 +11,7 @@ import { parseUsername } from '../../domain/usernames';
 import type { AppBindings, AppEnvironment } from '../environment';
 import { connectionCoordinator } from '../coordinator';
 import { requireRecentAuthentication } from '../identity/reauthentication';
+import { deriveMetaPlatformSubjectDigest } from '../meta-lifecycle/processor';
 
 const OAUTH_TTL_MILLISECONDS = 10 * 60 * 1000;
 const STATE_BYTES = 32;
@@ -253,6 +254,10 @@ export function oauthCallbackRoutes(factory?: OAuthClientFactory) {
         codes[0],
         attempt.redirectUri,
       );
+      const platformSubjectDigest = await deriveMetaPlatformSubjectDigest(
+        context.env,
+        credential.identity.platformUserId,
+      );
       const stored = await coordinator.stub.storeCredential(coordinator.ownerDigest, credential);
       if (!stored) throw new Error('Credential ownership rejected');
       try {
@@ -261,6 +266,8 @@ export function oauthCallbackRoutes(factory?: OAuthClientFactory) {
           attempt.connectionId,
           credential.identity.platformUserId,
           credential.identity.username,
+          platformSubjectDigest,
+          attempt.authorizationBoundarySeconds,
         );
       } catch (error) {
         await coordinator.stub.clearCredential(coordinator.ownerDigest);

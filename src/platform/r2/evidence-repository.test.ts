@@ -2,7 +2,11 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
 import { D1Repository } from '../d1/repository';
-import { InvalidEvidenceError, R2EvidenceRepository } from './evidence-repository';
+import {
+  EvidenceStorageError,
+  InvalidEvidenceError,
+  R2EvidenceRepository,
+} from './evidence-repository';
 
 async function fixture() {
   const d1 = new D1Repository(env.DB);
@@ -180,5 +184,51 @@ describe('R2EvidenceRepository', () => {
         retentionUntil: new Date('2026-07-18T07:00:00.000Z'),
       }),
     ).rejects.toBeInstanceOf(InvalidEvidenceError);
+  });
+
+  it('removes an R2 upload when revocation starts between authorization and D1 insert', async () => {
+    const { owner, connection } = await fixture();
+    const objectKey = `evidence/${owner.tenantId}/${connection.id}/race-object`;
+    const racingBucket = {
+      put: async (
+        key: string,
+        value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null | Blob,
+        options?: R2PutOptions,
+      ) => {
+        await env.DB.prepare("UPDATE threads_connections SET status = 'revoking' WHERE id = ?")
+          .bind(connection.id)
+          .run();
+        return env.EVIDENCE.put(key, value, options);
+      },
+      delete: (keys: string | string[]) => env.EVIDENCE.delete(keys),
+    } as unknown as R2Bucket;
+    const repository = new R2EvidenceRepository(env.DB, racingBucket, {
+      idFactory: (() => {
+        const ids = ['race-record', 'race-object', 'race-audit'];
+        return () => ids.shift() ?? crypto.randomUUID();
+      })(),
+      now: () => new Date('2026-07-19T07:00:00.000Z'),
+    });
+
+    await expect(
+      repository.put(owner, {
+        connectionId: connection.id,
+        evidenceType: 'diagnostic',
+        source: 'fixture',
+        contentType: 'text/plain',
+        body: new TextEncoder().encode('revocation race'),
+        retentionUntil: new Date('2026-07-20T07:00:00.000Z'),
+      }),
+    ).rejects.toBeInstanceOf(EvidenceStorageError);
+
+    await expect(env.EVIDENCE.get(objectKey)).resolves.toBeNull();
+    const evidence = await env.DB.prepare('SELECT 1 FROM evidence_objects WHERE id = ?')
+      .bind('evd_race-record')
+      .first();
+    const audit = await env.DB.prepare('SELECT 1 FROM audit_events WHERE target_ref = ?')
+      .bind('evd_race-record')
+      .first();
+    expect(evidence).toBeNull();
+    expect(audit).toBeNull();
   });
 });

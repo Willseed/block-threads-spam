@@ -8,6 +8,7 @@ import { connectionRoutes } from './routes/connections';
 import { activityRoutes } from './routes/activity';
 import { evidenceRoutes } from './routes/evidence';
 import { oauthCallbackRoutes, oauthConnectionRoutes } from './routes/oauth';
+import { metaLifecycleRoutes } from './routes/meta-lifecycle';
 import type { OAuthClientFactory } from './routes/oauth';
 import type { BrowserHandoffProvider } from '../adapters/browser-handoff/types';
 import { FailClosedBrowserHandoffProvider } from '../adapters/browser-handoff/fail-closed';
@@ -31,6 +32,7 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   application.use('/api/*', secureHeaders());
   application.use('/auth/*', secureHeaders());
+  application.use('/meta/*', secureHeaders());
 
   application.get('/api/health', (context) =>
     context.json({
@@ -79,9 +81,14 @@ export function createApp(dependencies: AppDependencies = {}) {
     createHandoffRoutes(browserHandoffProvider),
   );
   application.route('/auth/threads', oauthCallbackRoutes(dependencies.oauthClientFactory));
+  application.route('/meta/threads', metaLifecycleRoutes());
 
   application.notFound((context) => {
-    if (context.req.path.startsWith('/api/') || context.req.path.startsWith('/auth/')) {
+    if (
+      context.req.path.startsWith('/api/') ||
+      context.req.path.startsWith('/auth/') ||
+      context.req.path.startsWith('/meta/')
+    ) {
       return context.json(
         {
           error: {
@@ -104,7 +111,7 @@ const worker: ExportedHandler<AppEnvironment['Bindings']> = {
   fetch: app.fetch,
   scheduled(_controller, bindings, executionContext) {
     executionContext.waitUntil(
-      Promise.all([runMaintenance(bindings), runScheduledScans(bindings)]),
+      runMaintenance(bindings).then(() => runScheduledScans(bindings)),
     );
   },
 };

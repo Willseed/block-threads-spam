@@ -1,0 +1,115 @@
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run quality checks
+        run: npm run check
+
+  deploy:
+    name: Deploy
+    if: github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    env:
+      WORKER_VERSION_TAG: github-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build deployment bundle
+        run: npm run build
+
+      - name: Prepare Worker secrets file
+        shell: bash
+        env:
+          TEAM_DOMAIN: ${{ secrets.TEAM_DOMAIN }}
+          POLICY_AUD: ${{ secrets.POLICY_AUD }}
+          APP_ORIGIN: ${{ secrets.APP_ORIGIN }}
+          SESSION_ENCRYPTION_KEY: ${{ secrets.SESSION_ENCRYPTION_KEY }}
+          COORDINATOR_NAMESPACE_KEY: ${{ secrets.COORDINATOR_NAMESPACE_KEY }}
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in \
+            TEAM_DOMAIN \
+            POLICY_AUD \
+            APP_ORIGIN \
+            SESSION_ENCRYPTION_KEY \
+            COORDINATOR_NAMESPACE_KEY \
+            META_APP_ID \
+            META_APP_SECRET
+          do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required GitHub Actions secret is missing: ${name}" >&2
+              exit 1
+            fi
+          done
+
+          jq -n '{
+            TEAM_DOMAIN: env.TEAM_DOMAIN,
+            POLICY_AUD: env.POLICY_AUD,
+            APP_ORIGIN: env.APP_ORIGIN,
+            SESSION_ENCRYPTION_KEY: env.SESSION_ENCRYPTION_KEY,
+            COORDINATOR_NAMESPACE_KEY: env.COORDINATOR_NAMESPACE_KEY,
+            META_APP_ID: env.META_APP_ID,
+            META_APP_SECRET: env.META_APP_SECRET
+          }' > "${RUNNER_TEMP}/worker-secrets.json"
+          chmod 600 "${RUNNER_TEMP}/worker-secrets.json"
+
+      - name: Upload Worker version, migrate D1, and promote
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: versions upload --tag ${{ env.WORKER_VERSION_TAG }} --message ${{ env.WORKER_VERSION_TAG }} --secrets-file ${{ runner.temp }}/worker-secrets.json
+          postCommands: |
+            wrangler d1 migrations apply DB --remote
+            wrangler versions deploy --version-tag ${{ env.WORKER_VERSION_TAG }} --message ${{ env.WORKER_VERSION_TAG }} --yes
+
+      - name: Remove Worker secrets file
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/worker-secrets.json"

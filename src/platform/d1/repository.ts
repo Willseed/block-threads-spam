@@ -31,9 +31,11 @@ export interface OAuthAttemptRecord {
   redirectUri: string;
   jobId: string;
   leaseGeneration: number;
+  authorizationBoundarySeconds: number;
 }
 
-export interface NewOAuthAttempt extends OAuthAttemptRecord {
+export interface NewOAuthAttempt
+  extends Omit<OAuthAttemptRecord, 'authorizationBoundarySeconds'> {
   stateHash: string;
   sessionBinding: string;
   expiresAt: string;
@@ -163,6 +165,8 @@ export interface ApplicationRepository {
     connectionId: string,
     platformUserId: string,
     username: string,
+    platformSubjectDigest: string,
+    authorizationBoundarySeconds: number,
   ): Promise<ThreadsConnectionRecord>;
   confirmOAuthIdentity(
     tenant: TenantContext,
@@ -290,6 +294,7 @@ interface OAuthAttemptRow {
   redirect_uri: string;
   job_id: string;
   lease_generation: number;
+  created_at: string;
 }
 
 interface AuditEventRow {
@@ -343,6 +348,15 @@ interface CandidateRow {
   current_snapshot_id: string | null;
   target_platform_id: string | null;
   last_checked_at: string | null;
+}
+
+function oauthAttemptAuthorizationBoundary(createdAt: string): number {
+  const createdAtMilliseconds = Date.parse(createdAt);
+  const createdAtSeconds = Math.floor(createdAtMilliseconds / 1000);
+  if (!Number.isSafeInteger(createdAtSeconds) || createdAtSeconds <= 0) {
+    throw new Error('OAuth attempt creation time is invalid');
+  }
+  return createdAtSeconds;
 }
 
 export class TenantAuthorizationError extends Error {
@@ -613,7 +627,7 @@ export class D1Repository implements ApplicationRepository {
            AND EXISTS (
              SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
            )
-         RETURNING connection_id, redirect_uri, job_id, lease_generation`,
+         RETURNING connection_id, redirect_uri, job_id, lease_generation, created_at`,
       )
       .bind(
         now,
@@ -632,6 +646,7 @@ export class D1Repository implements ApplicationRepository {
           redirectUri: row.redirect_uri,
           jobId: row.job_id,
           leaseGeneration: row.lease_generation,
+          authorizationBoundarySeconds: oauthAttemptAuthorizationBoundary(row.created_at),
         }
       : undefined;
   }
@@ -641,27 +656,46 @@ export class D1Repository implements ApplicationRepository {
     connectionId: string,
     platformUserId: string,
     username: string,
+    platformSubjectDigest: string,
+    authorizationBoundarySeconds: number,
   ): Promise<ThreadsConnectionRecord> {
+    if (!/^[a-f0-9]{64}$/u.test(platformSubjectDigest)) {
+      throw new TypeError('Invalid Meta platform subject digest');
+    }
+    if (
+      !Number.isSafeInteger(authorizationBoundarySeconds) ||
+      authorizationBoundarySeconds <= 0
+    ) {
+      throw new TypeError('Invalid OAuth grant boundary');
+    }
     const now = this.#now().toISOString();
     const result = await this.#db
       .prepare(
         `UPDATE threads_connections
          SET platform_user_id = ?, protected_username = ?,
-             status = 'awaiting_identity_confirmation', last_verified_at = ?
+             status = 'awaiting_identity_confirmation', last_verified_at = ?,
+             oauth_granted_at = ?
          WHERE id = ? AND tenant_id = ? AND connection_mode = 'meta_oauth'
            AND status NOT IN ('revoking', 'revoked')
            AND EXISTS (
              SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM meta_lifecycle_requests
+             WHERE platform_subject_digest = ? AND issued_at >= ?
            )`,
       )
       .bind(
         platformUserId,
         username,
         now,
+        authorizationBoundarySeconds,
         connectionId,
         tenant.tenantId,
         tenant.tenantId,
         tenant.userId,
+        platformSubjectDigest,
+        authorizationBoundarySeconds,
       )
       .run();
     if (result.meta.changes !== 1) throw new TenantAuthorizationError();
