@@ -25,7 +25,7 @@ function randomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   let binary = '';
   for (const byte of bytes) binary += String.fromCodePoint(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
 async function sha256(value: string): Promise<string> {
@@ -100,7 +100,7 @@ export function createHandoffRoutes(injectedProvider?: BrowserHandoffProvider) {
       );
     }
     const connection = await repository.getConnection(tenant, approval.connectionId);
-    if (!connection || connection.status !== 'connected') {
+    if (connection?.status !== 'connected') {
       await repository.failHandoffBeforeIssue(tenant, approval.id);
       return context.json(
         { error: { code: 'connection_required', message: 'Threads 連線已失效。' } },

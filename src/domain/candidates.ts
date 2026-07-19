@@ -89,13 +89,11 @@ function punctuationVariants(username: string): CandidateReason[] {
       const without = `${username.slice(0, index)}${username.slice(index + 1)}`;
       const replacement = character === '.' ? '_' : '.';
       candidates.push(
-        ...[
-          { username: without, reason: `${RULE_REASONS.punctuation}：移除 ${character}` },
-          {
-            username: `${username.slice(0, index)}${replacement}${username.slice(index + 1)}`,
-            reason: `${RULE_REASONS.punctuation}：${character} → ${replacement}`,
-          },
-        ],
+        { username: without, reason: `${RULE_REASONS.punctuation}：移除 ${character}` },
+        {
+          username: `${username.slice(0, index)}${replacement}${username.slice(index + 1)}`,
+          reason: `${RULE_REASONS.punctuation}：${character} → ${replacement}`,
+        },
       );
     }
   }
@@ -206,6 +204,50 @@ function validateAffixes(affixes: readonly string[]): readonly string[] {
   });
 }
 
+function parseCandidateVariant(
+  candidateUsername: string,
+  protectedUsername: string,
+): string | undefined {
+  if (candidateUsername === protectedUsername || !withinUsernameLength(candidateUsername)) {
+    return undefined;
+  }
+  try {
+    return parseUsername(candidateUsername);
+  } catch {
+    return undefined;
+  }
+}
+
+function collectRuleVariants(
+  collected: Map<string, CandidateVariant>,
+  rule: VariantRule,
+  factory: () => CandidateReason[],
+  protectedUsername: string,
+  perRuleLimit: number,
+  totalLimit: number,
+): void {
+  let acceptedForRule = 0;
+  for (const candidate of factory()) {
+    if (acceptedForRule >= perRuleLimit || collected.size >= totalLimit) break;
+    const parsed = parseCandidateVariant(candidate.username, protectedUsername);
+    if (parsed === undefined) continue;
+
+    const existing = collected.get(parsed);
+    if (existing) {
+      if (!existing.rules.includes(rule)) existing.rules.push(rule);
+      if (!existing.reasons.includes(candidate.reason)) existing.reasons.push(candidate.reason);
+      continue;
+    }
+
+    collected.set(parsed, {
+      username: parsed,
+      rules: [rule],
+      reasons: [candidate.reason],
+    });
+    acceptedForRule += 1;
+  }
+}
+
 export function generateCandidateVariants(
   protectedUsernameInput: string,
   options: CandidateGenerationOptions = {},
@@ -238,33 +280,14 @@ export function generateCandidateVariants(
 
   for (const rule of VARIANT_RULES) {
     if (!enabledRules.has(rule)) continue;
-    let acceptedForRule = 0;
-
-    for (const candidate of factories[rule]()) {
-      if (acceptedForRule >= perRuleLimit || collected.size >= totalLimit) break;
-      if (candidate.username === protectedUsername || !withinUsernameLength(candidate.username)) continue;
-
-      let parsed: string;
-      try {
-        parsed = parseUsername(candidate.username);
-      } catch {
-        continue;
-      }
-
-      const existing = collected.get(parsed);
-      if (existing) {
-        if (!existing.rules.includes(rule)) existing.rules.push(rule);
-        if (!existing.reasons.includes(candidate.reason)) existing.reasons.push(candidate.reason);
-        continue;
-      }
-
-      collected.set(parsed, {
-        username: parsed,
-        rules: [rule],
-        reasons: [candidate.reason],
-      });
-      acceptedForRule += 1;
-    }
+    collectRuleVariants(
+      collected,
+      rule,
+      factories[rule],
+      protectedUsername,
+      perRuleLimit,
+      totalLimit,
+    );
 
     if (collected.size >= totalLimit) break;
   }

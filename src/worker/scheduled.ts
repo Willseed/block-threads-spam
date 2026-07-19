@@ -6,6 +6,21 @@ import { R2EvidenceRepository } from '../platform/r2/evidence-repository';
 import { connectionCoordinator } from './coordinator';
 import type { AppBindings } from './environment';
 
+interface ProfileForSimilarity {
+  username: string;
+  displayName?: string;
+  biography?: string;
+}
+
+function profileForSimilarity(profile: ProfileForSimilarity) {
+  const comparable: { username: string; displayName?: string; bio?: string } = {
+    username: profile.username,
+  };
+  if (profile.displayName) comparable.displayName = profile.displayName;
+  if (profile.biography) comparable.bio = profile.biography;
+  return comparable;
+}
+
 export async function runScheduledScans(bindings: AppBindings): Promise<number> {
   if (bindings.FEATURE_META_PROFILE_LOOKUP !== 'true') return 0;
   const scheduler = new SchedulerRepository(bindings.DB);
@@ -48,13 +63,7 @@ export async function runScheduledScans(bindings: AppBindings): Promise<number> 
                 profile: lookup.profile,
                 assessment: assessProfileSimilarity(
                   { username: schedule.protectedUsername },
-                  {
-                    username: lookup.profile.username,
-                    ...(lookup.profile.displayName
-                      ? { displayName: lookup.profile.displayName }
-                      : {}),
-                    ...(lookup.profile.biography ? { bio: lookup.profile.biography } : {}),
-                  },
+                  profileForSimilarity(lookup.profile),
                 ),
               }
             : lookup;

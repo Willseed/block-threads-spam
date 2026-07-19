@@ -129,6 +129,14 @@ function oauthAuthorizationMessage(result: string): string {
   return OAUTH_AUTHORIZATION_DEFAULT_MESSAGE;
 }
 
+function initialLoadErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 401) {
+    return '請先透過 Cloudflare Access 登入本服務。';
+  }
+  if (error instanceof Error) return error.message;
+  return '目前無法載入服務。';
+}
+
 function sanitizeAuthorizationUrl(raw: string): string {
   const authorizationUrl = new URL(raw);
   if (
@@ -615,6 +623,10 @@ function Connections({ connections, onCreated }: ReadonlyConnectionsProps) {
   const [username, setUsername] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [oauthAuthorization, setOauthAuthorization] = useState<{
+    connectionId: string;
+    url: string;
+  }>();
 
   useEffect(() => {
     const result = new URLSearchParams(window.location.search).get('oauth');
@@ -644,12 +656,17 @@ function Connections({ connections, onCreated }: ReadonlyConnectionsProps) {
   async function startOAuth(connectionId: string) {
     setBusy(true);
     setMessage(undefined);
+    setOauthAuthorization(undefined);
     try {
       const result = await api.startOAuth(connectionId);
-      const authorizationUrl = sanitizeAuthorizationUrl(result.authorizationUrl);
-      window.location.assign(authorizationUrl);
+      setOauthAuthorization({
+        connectionId,
+        url: sanitizeAuthorizationUrl(result.authorizationUrl),
+      });
+      setMessage('Threads 授權連結已準備完成，請使用下方連結繼續。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '目前無法開始 Threads OAuth。');
+    } finally {
       setBusy(false);
     }
   }
@@ -666,6 +683,42 @@ function Connections({ connections, onCreated }: ReadonlyConnectionsProps) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function connectionAction(connection: Connection) {
+    if (connection.status !== 'awaiting_identity_confirmation') return null;
+
+    if (connection.platformUserId) {
+      return (
+        <button
+          className="button primary"
+          type="button"
+          disabled={busy}
+          onClick={() => fireAndForget(confirmOAuth(connection))}
+        >
+          確認保護 @{connection.protectedUsername}
+        </button>
+      );
+    }
+
+    if (oauthAuthorization?.connectionId === connection.id) {
+      return (
+        <a className="button secondary" href={oauthAuthorization.url}>
+          前往 Threads 完成授權
+        </a>
+      );
+    }
+
+    return (
+      <button
+        className="button secondary"
+        type="button"
+        disabled={busy}
+        onClick={() => fireAndForget(startOAuth(connection.id))}
+      >
+        連線 Threads OAuth
+      </button>
+    );
   }
 
   return (
@@ -711,27 +764,7 @@ function Connections({ connections, onCreated }: ReadonlyConnectionsProps) {
                 <small>建立於 {formatDate(connection.createdAt)}</small>
               </div>
               <span className="status-pill">{STATUS_LABELS[connection.status]}</span>
-              {connection.status === 'awaiting_identity_confirmation' ? (
-                connection.platformUserId ? (
-                  <button
-                    className="button primary"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => fireAndForget(confirmOAuth(connection))}
-                  >
-                    確認保護 @{connection.protectedUsername}
-                  </button>
-                ) : (
-                  <button
-                    className="button secondary"
-                    type="button"
-                    disabled={busy}
-                    onClick={() => fireAndForget(startOAuth(connection.id))}
-                  >
-                    連線 Threads OAuth
-                  </button>
-                )
-              ) : null}
+              {connectionAction(connection)}
             </article>
           ))}
         </section>
@@ -940,13 +973,7 @@ function App() {
         setCapabilities(capabilityResult.capabilities);
         await refreshCandidates(connectionResult.connections[0]);
       } catch (error) {
-        setFatalError(
-          error instanceof ApiError && error.status === 401
-            ? '請先透過 Cloudflare Access 登入本服務。'
-            : error instanceof Error
-              ? error.message
-              : '目前無法載入服務。',
-        );
+        setFatalError(initialLoadErrorMessage(error));
       } finally {
         setLoading(false);
       }

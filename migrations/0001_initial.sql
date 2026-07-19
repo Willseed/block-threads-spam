@@ -64,7 +64,7 @@ CREATE TABLE candidates (
   reasons_json TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN (
     'new', 'pending_review', 'watching', 'ignored', 'preparing_block', 'blocking',
-    'blocked', 'needs_review', 'not_found', 'lookup_unavailable'
+    'blocked', 'needs_review', 'not_found', 'lookup_unavailable' -- NOSONAR - required by independent status domains.
   )),
   priority TEXT NOT NULL CHECK (priority IN ('low', 'medium', 'high')),
   first_seen_at TEXT NOT NULL,

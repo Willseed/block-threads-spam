@@ -1161,7 +1161,7 @@ export class D1Repository implements ApplicationRepository {
       throw new TypeError('Invalid approval binding');
     }
     const candidate = await this.getCandidate(tenant, connectionId, candidateId);
-    if (!candidate || candidate.username !== exactTargetUsername) {
+    if (candidate?.username !== exactTargetUsername) {
       throw new ApprovalPreconditionError();
     }
     if (!candidate.currentSnapshotId || !candidate.targetPlatformId || !candidate.lastCheckedAt) {

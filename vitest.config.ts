@@ -17,9 +17,7 @@ const testEnvDefaults = {
 const testEnv = process.env as Record<string, string | undefined>;
 
 for (const [key, value] of Object.entries(testEnvDefaults)) {
-  if (testEnv[key] === undefined) {
-    testEnv[key] = value;
-  }
+  testEnv[key] ??= value;
 }
 
 const wranglerLogPath = path.join(process.cwd(), '.wrangler-vitest', 'logs', 'wrangler.log');

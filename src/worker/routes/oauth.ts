@@ -50,7 +50,7 @@ function randomState(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(STATE_BYTES));
   let binary = '';
   for (const byte of bytes) binary += String.fromCodePoint(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
 async function sha256(value: string): Promise<string> {
@@ -82,8 +82,7 @@ export function oauthConnectionRoutes(factory?: OAuthClientFactory) {
     const repository = context.get('repository');
     const connection = await repository.getConnection(tenant, context.req.param('connectionId'));
     if (
-      !connection ||
-      connection.connectionMode !== 'meta_oauth' ||
+      connection?.connectionMode !== 'meta_oauth' ||
       connection.status === 'revoked' ||
       connection.status === 'revoking'
     ) {
