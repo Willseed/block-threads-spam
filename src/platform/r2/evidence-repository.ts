@@ -53,6 +53,12 @@ interface EvidenceKeyRow {
   r2_key: string;
 }
 
+interface ExpiredEvidenceRow extends EvidenceKeyRow {
+  id: string;
+  tenant_id: string;
+  connection_id: string;
+}
+
 interface EvidenceRepositoryOptions {
   idFactory?: () => string;
   now?: () => Date;
@@ -229,12 +235,12 @@ export class R2EvidenceRepository {
         `SELECT id, connection_id, candidate_id, evidence_type, r2_key, sha256,
                 content_type, byte_length, created_at, retention_until
          FROM evidence_objects
-         WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL
+         WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL AND retention_until > ?
            AND EXISTS (
              SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
            )`,
       )
-      .bind(evidenceId, tenant.tenantId, tenant.tenantId, tenant.userId)
+      .bind(evidenceId, tenant.tenantId, this.#now().toISOString(), tenant.tenantId, tenant.userId)
       .first<EvidenceRow>();
     if (!row) return undefined;
 
@@ -302,5 +308,63 @@ export class R2EvidenceRepository {
       await this.#bucket.delete(keys.slice(index, index + 1000));
     }
     return keys.length;
+  }
+
+  async purgeExpired(limit = 100): Promise<number> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) {
+      throw new RangeError('Evidence purge limit must be between 1 and 1000');
+    }
+
+    const deletedAt = this.#now().toISOString();
+    const { results } = await this.#db
+      .prepare(
+        `SELECT id, tenant_id, connection_id, r2_key
+         FROM evidence_objects
+         WHERE deleted_at IS NULL AND retention_until <= ?
+         ORDER BY retention_until ASC
+         LIMIT ?`,
+      )
+      .bind(deletedAt, limit)
+      .all<ExpiredEvidenceRow>();
+
+    let purged = 0;
+    for (const row of results) {
+      await this.#bucket.delete(row.r2_key);
+      const [update] = await this.#db.batch([
+        this.#db
+          .prepare(
+            `UPDATE evidence_objects
+             SET deleted_at = ?
+             WHERE id = ? AND deleted_at IS NULL AND retention_until <= ?`,
+          )
+          .bind(deletedAt, row.id, deletedAt),
+        this.#db
+          .prepare(
+            `INSERT INTO audit_events
+               (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+                metadata_json, created_at)
+             SELECT ?, ?, NULL, ?, 'evidence.retention_expired', ?, '{}', ?
+             WHERE EXISTS (
+               SELECT 1 FROM evidence_objects WHERE id = ? AND deleted_at = ?
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM audit_events
+                 WHERE event_type = 'evidence.retention_expired' AND target_ref = ?
+               )`,
+          )
+          .bind(
+            `aud_${this.#idFactory()}`,
+            row.tenant_id,
+            row.connection_id,
+            row.id,
+            deletedAt,
+            row.id,
+            deletedAt,
+            row.id,
+          ),
+      ]);
+      if (update.meta.changes === 1) purged += 1;
+    }
+    return purged;
   }
 }

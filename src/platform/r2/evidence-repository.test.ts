@@ -109,6 +109,51 @@ describe('R2EvidenceRepository', () => {
     await expect(env.EVIDENCE.get(row.r2_key)).resolves.toBeNull();
   });
 
+  it('fails closed at retention expiry and purges expired objects with an audit tombstone', async () => {
+    const { owner, connection } = await fixture();
+    let now = new Date('2026-07-19T07:00:00.000Z');
+    const repository = new R2EvidenceRepository(env.DB, env.EVIDENCE, {
+      now: () => now,
+    });
+    const record = await repository.put(owner, {
+      connectionId: connection.id,
+      evidenceType: 'diagnostic',
+      source: 'fixture',
+      contentType: 'text/plain',
+      body: new TextEncoder().encode('expires promptly'),
+      retentionUntil: new Date('2026-07-20T07:00:00.000Z'),
+    });
+    const row = await env.DB.prepare('SELECT r2_key FROM evidence_objects WHERE id = ?')
+      .bind(record.id)
+      .first<{ r2_key: string }>();
+    if (!row) throw new Error('Missing evidence fixture');
+
+    now = new Date('2026-07-20T07:00:00.000Z');
+    await expect(repository.get(owner, record.id)).resolves.toBeUndefined();
+    await expect(repository.purgeExpired(10)).resolves.toBe(1);
+    await expect(env.EVIDENCE.get(row.r2_key)).resolves.toBeNull();
+    await expect(repository.purgeExpired(10)).resolves.toBe(0);
+
+    const tombstone = await env.DB.prepare(
+      'SELECT deleted_at FROM evidence_objects WHERE id = ?',
+    )
+      .bind(record.id)
+      .first<{ deleted_at: string }>();
+    expect(tombstone?.deleted_at).toBe(now.toISOString());
+    const audit = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'evidence.retention_expired' AND target_ref = ?",
+    )
+      .bind(record.id)
+      .first<{ count: number }>();
+    expect(audit?.count).toBe(1);
+  });
+
+  it('bounds retention cleanup work', async () => {
+    const repository = new R2EvidenceRepository(env.DB, env.EVIDENCE);
+    await expect(repository.purgeExpired(0)).rejects.toBeInstanceOf(RangeError);
+    await expect(repository.purgeExpired(1001)).rejects.toBeInstanceOf(RangeError);
+  });
+
   it('rejects empty, oversized or expired evidence before writing', async () => {
     const { owner, connection } = await fixture();
     const repository = new R2EvidenceRepository(env.DB, env.EVIDENCE, {
