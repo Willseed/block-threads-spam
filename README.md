@@ -19,6 +19,10 @@ npm run check
 
 健康檢查位於 `GET /api/health`。
 
+## 候選產生原則
+
+`generateCandidateVariants` 只執行單步、受控的視覺字元、標點、編輯與前後綴變形。呼叫端必須設定或接受總量與每規則配額；輸出會保留規則及繁體中文理由，且不會包含正式帳號本身。
+
 ## 安全邊界
 
 - Threads 密碼、雙重驗證碼、Cookie 或 Session 檔不會由應用表單收集。
