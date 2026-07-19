@@ -1,8 +1,14 @@
 import { DurableObject } from 'cloudflare:workers';
 
 import type { ThreadsOAuthCredential } from '../adapters/threads-oauth/types';
+import { MetaThreadsProfileAdapter } from '../adapters/threads-profile/meta-api';
+import type { ProfileLookupResult } from '../adapters/threads-profile/types';
 import type { AppBindings } from '../worker/environment';
-import { encryptCredential, type EncryptedThreadsCredential } from './credential-vault';
+import {
+  decryptAccessToken,
+  encryptCredential,
+  type EncryptedThreadsCredential,
+} from './credential-vault';
 
 export type ConnectionJobKind =
   | 'connect'
@@ -232,6 +238,33 @@ export class ConnectionCoordinator extends DurableObject<AppBindings> {
     const state = await this.ctx.storage.get<CoordinatorState>(STATE_KEY);
     if (!state || !ownerMatches(state, ownerDigest)) return false;
     return this.ctx.storage.delete(CREDENTIAL_KEY);
+  }
+
+  async lookupProfile(ownerDigest: string, username: string): Promise<ProfileLookupResult> {
+    assertOwnerDigest(ownerDigest);
+    if (this.env.FEATURE_META_PROFILE_LOOKUP !== 'true') {
+      return { status: 'unavailable', reason: 'capability_unavailable' };
+    }
+    const state = await this.ctx.storage.get<CoordinatorState>(STATE_KEY);
+    if (!state || !ownerMatches(state, ownerDigest) || state.revoked) {
+      return { status: 'unavailable', reason: 'permission_denied' };
+    }
+    const credential = await this.ctx.storage.get<EncryptedThreadsCredential>(CREDENTIAL_KEY);
+    if (!credential || Date.parse(credential.expiresAt) <= Date.now()) {
+      return { status: 'unavailable', reason: 'permission_denied' };
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await decryptAccessToken(credential, this.env.SESSION_ENCRYPTION_KEY);
+    } catch {
+      await this.ctx.storage.delete(CREDENTIAL_KEY);
+      return { status: 'unavailable', reason: 'permission_denied' };
+    }
+    const adapter = new MetaThreadsProfileAdapter({
+      apiVersion: this.env.META_GRAPH_API_VERSION,
+    });
+    return adapter.lookup({ username, accessToken });
   }
 
   async status(ownerDigest: string): Promise<CoordinatorStatus | undefined> {

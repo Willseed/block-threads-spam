@@ -188,4 +188,24 @@ describe('ConnectionCoordinator', () => {
     await expect(stub.revoke(OWNER, 0)).resolves.toBe(1);
     await expect(stub.credentialStatus(OWNER)).resolves.toEqual({ connected: false });
   });
+
+  it('uses a credential internally for profile lookup without exporting the token', async () => {
+    const stub = coordinator();
+    await stub.acquire({
+      ownerDigest: OWNER,
+      revocationVersion: 0,
+      jobId: 'connect-lookup',
+      kind: 'connect',
+      ttlSeconds: 60,
+    });
+    await stub.storeCredential(OWNER, CREDENTIAL);
+
+    const result = await stub.lookupProfile(OWNER, 'candidate.name');
+
+    expect(result).toEqual({
+      status: 'found',
+      profile: { username: 'candidate.name', displayName: 'Candidate Name' },
+    });
+    expect(JSON.stringify(result)).not.toContain(CREDENTIAL.accessToken);
+  });
 });

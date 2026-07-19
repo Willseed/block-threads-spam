@@ -1,4 +1,6 @@
 import type { AppIdentity } from '../../worker/identity/types';
+import type { SimilarityAssessment } from '../../domain/similarity';
+import type { ProfileLookupFailure, ThreadsPublicProfile } from '../../adapters/threads-profile/types';
 
 export interface TenantContext {
   tenantId: string;
@@ -64,6 +66,15 @@ export interface NewCandidate {
   priority?: CandidateRecord['priority'];
 }
 
+export type CandidateLookupUpdate =
+  | {
+      status: 'found';
+      profile: ThreadsPublicProfile;
+      assessment: SimilarityAssessment;
+    }
+  | { status: 'not_found' }
+  | { status: 'unavailable'; reason: ProfileLookupFailure };
+
 export interface ApplicationRepository {
   ensurePersonalTenant(identity: AppIdentity): Promise<TenantContext>;
   createConnection(
@@ -99,6 +110,17 @@ export interface ApplicationRepository {
     candidate: NewCandidate,
   ): Promise<CandidateRecord>;
   listCandidates(tenant: TenantContext, connectionId: string): Promise<CandidateRecord[]>;
+  getCandidate(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+  ): Promise<CandidateRecord | undefined>;
+  recordCandidateLookup(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+    update: CandidateLookupUpdate,
+  ): Promise<CandidateRecord>;
   addGeneratedCandidates(
     tenant: TenantContext,
     connectionId: string,
@@ -606,6 +628,135 @@ export class D1Repository implements ApplicationRepository {
       .bind(tenant.tenantId, connectionId, tenant.tenantId, tenant.userId)
       .all<CandidateRow>();
     return results.map(candidateRecord);
+  }
+
+  async getCandidate(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+  ): Promise<CandidateRecord | undefined> {
+    const row = await this.#db
+      .prepare(
+        `SELECT id, username, source_type, source_rules_json, reasons_json, status, priority,
+                first_seen_at
+         FROM candidates
+         WHERE id = ? AND tenant_id = ? AND connection_id = ?
+           AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )`,
+      )
+      .bind(candidateId, tenant.tenantId, connectionId, tenant.tenantId, tenant.userId)
+      .first<CandidateRow>();
+    return row ? candidateRecord(row) : undefined;
+  }
+
+  async recordCandidateLookup(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+    update: CandidateLookupUpdate,
+  ): Promise<CandidateRecord> {
+    if (!(await this.getCandidate(tenant, connectionId, candidateId))) {
+      throw new TenantAuthorizationError();
+    }
+    const now = this.#now().toISOString();
+    const auditId = `aud_${this.#idFactory()}`;
+    const statements: D1PreparedStatement[] = [];
+
+    if (update.status === 'found') {
+      const snapshotId = `snp_${this.#idFactory()}`;
+      statements.push(
+        this.#db
+          .prepare(
+            `INSERT INTO candidate_snapshots
+               (id, candidate_id, source, username, display_name, biography_excerpt,
+                similarity_reasons_json, checked_at)
+             SELECT ?, id, 'meta_api', ?, ?, ?, ?, ?
+             FROM candidates
+             WHERE id = ? AND tenant_id = ? AND connection_id = ?`,
+          )
+          .bind(
+            snapshotId,
+            update.profile.username,
+            update.profile.displayName ?? null,
+            update.profile.biography?.slice(0, 500) ?? null,
+            JSON.stringify([
+              ...update.assessment.signals.map(({ explanation }) => explanation),
+              update.assessment.disclaimer,
+            ]),
+            now,
+            candidateId,
+            tenant.tenantId,
+            connectionId,
+          ),
+        this.#db
+          .prepare(
+            `UPDATE candidates
+             SET current_snapshot_id = ?, last_checked_at = ?, priority = ?,
+                 status = CASE
+                   WHEN status IN ('new', 'pending_review', 'not_found', 'lookup_unavailable')
+                   THEN 'pending_review'
+                   ELSE status
+                 END
+             WHERE id = ? AND tenant_id = ? AND connection_id = ?`,
+          )
+          .bind(
+            snapshotId,
+            now,
+            update.assessment.priority,
+            candidateId,
+            tenant.tenantId,
+            connectionId,
+          ),
+      );
+    } else {
+      const nextStatus = update.status === 'not_found' ? 'not_found' : 'lookup_unavailable';
+      statements.push(
+        this.#db
+          .prepare(
+            `UPDATE candidates
+             SET last_checked_at = ?,
+                 status = CASE
+                   WHEN status IN ('new', 'pending_review', 'not_found', 'lookup_unavailable')
+                   THEN ?
+                   ELSE status
+                 END
+             WHERE id = ? AND tenant_id = ? AND connection_id = ?`,
+          )
+          .bind(now, nextStatus, candidateId, tenant.tenantId, connectionId),
+      );
+    }
+
+    statements.push(
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, 'candidate.lookup_completed', username, ?, ?
+           FROM candidates
+           WHERE id = ? AND tenant_id = ? AND connection_id = ?`,
+        )
+        .bind(
+          auditId,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          JSON.stringify({
+            result: update.status,
+            ...(update.status === 'unavailable' ? { reason: update.reason } : {}),
+          }),
+          now,
+          candidateId,
+          tenant.tenantId,
+          connectionId,
+        ),
+    );
+    const results = await this.#db.batch(statements);
+    if (results[0].meta.changes !== 1) throw new TenantAuthorizationError();
+    const candidate = await this.getCandidate(tenant, connectionId, candidateId);
+    if (!candidate) throw new TenantAuthorizationError();
+    return candidate;
   }
 
   async addGeneratedCandidates(

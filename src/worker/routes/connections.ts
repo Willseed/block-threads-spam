@@ -2,12 +2,14 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 
 import { generateCandidateVariants, VARIANT_RULES } from '../../domain/candidates';
+import { assessProfileSimilarity } from '../../domain/similarity';
 import { parseUsername } from '../../domain/usernames';
 import {
   CandidateAlreadyExistsError,
   TenantAuthorizationError,
 } from '../../platform/d1/repository';
 import type { AppEnvironment } from '../environment';
+import { connectionCoordinator } from '../coordinator';
 
 const connectionInput = z.object({
   protectedUsername: z.string().min(1).max(31),
@@ -146,4 +148,87 @@ connectionRoutes.post('/:connectionId/candidates/generate', async (context) => {
     },
     candidates,
   });
+});
+
+connectionRoutes.post('/:connectionId/candidates/:candidateId/refresh', async (context) => {
+  if (context.env.FEATURE_META_PROFILE_LOOKUP !== 'true') {
+    return context.json(
+      { error: { code: 'capability_unavailable', message: 'Threads 個人檔案查詢目前未啟用。' } },
+      503,
+    );
+  }
+  const tenant = context.get('tenant');
+  const repository = context.get('repository');
+  const connectionId = context.req.param('connectionId');
+  const candidateId = context.req.param('candidateId');
+  const [connection, candidate] = await Promise.all([
+    repository.getConnection(tenant, connectionId),
+    repository.getCandidate(tenant, connectionId, candidateId),
+  ]);
+  if (!connection || !candidate) {
+    return context.json(
+      { error: { code: 'not_found', message: '找不到指定的候選帳號。' } },
+      404,
+    );
+  }
+  if (connection.status !== 'connected') {
+    return context.json(
+      { error: { code: 'connection_required', message: '請先完成 Threads 帳號連線。' } },
+      409,
+    );
+  }
+
+  let coordinator;
+  try {
+    coordinator = await connectionCoordinator(context.env, tenant.tenantId, connectionId);
+  } catch {
+    return context.json(
+      { error: { code: 'service_unavailable', message: 'Threads 查詢目前無法使用。' } },
+      503,
+    );
+  }
+  const jobId = `refresh-${crypto.randomUUID()}`;
+  const lease = await coordinator.stub.acquire({
+    ownerDigest: coordinator.ownerDigest,
+    revocationVersion: connection.revocationVersion,
+    jobId,
+    kind: 'candidate_refresh',
+    ttlSeconds: 60,
+  });
+  if (lease.status !== 'acquired') {
+    return context.json(
+      { error: { code: 'connection_busy', message: '這個帳號已有工作進行中。' } },
+      409,
+    );
+  }
+
+  try {
+    const lookup = await coordinator.stub.lookupProfile(coordinator.ownerDigest, candidate.username);
+    const update =
+      lookup.status === 'found'
+        ? {
+            status: 'found' as const,
+            profile: lookup.profile,
+            assessment: assessProfileSimilarity(
+              { username: connection.protectedUsername },
+              {
+                username: lookup.profile.username,
+                ...(lookup.profile.displayName
+                  ? { displayName: lookup.profile.displayName }
+                  : {}),
+                ...(lookup.profile.biography ? { bio: lookup.profile.biography } : {}),
+              },
+            ),
+          }
+        : lookup;
+    const updatedCandidate = await repository.recordCandidateLookup(
+      tenant,
+      connectionId,
+      candidateId,
+      update,
+    );
+    return context.json({ lookup, candidate: updatedCandidate });
+  } finally {
+    await coordinator.stub.release(coordinator.ownerDigest, jobId, lease.generation);
+  }
 });

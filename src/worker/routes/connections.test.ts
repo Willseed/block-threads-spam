@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../index';
 import type { IdentityVerifier } from '../identity/types';
+import { connectionCoordinator } from '../coordinator';
 
 function applicationFor(subject: string) {
   const verifier: IdentityVerifier = {
@@ -24,6 +25,49 @@ async function createConnection(subject = 'idp|owner') {
   expect(response.status).toBe(201);
   const body = await response.json<{ connection: { id: string; protectedUsername: string } }>();
   return body.connection;
+}
+
+async function installConnectedCredential(connectionId: string) {
+  const row = await env.DB.prepare('SELECT tenant_id FROM threads_connections WHERE id = ?')
+    .bind(connectionId)
+    .first<{ tenant_id: string }>();
+  if (!row) throw new Error('Missing test connection');
+  await env.DB.prepare(
+    `UPDATE threads_connections
+     SET status = 'connected', platform_user_id = 'owner-platform-id'
+     WHERE id = ?`,
+  )
+    .bind(connectionId)
+    .run();
+  const coordinator = await connectionCoordinator(
+    {
+      CONNECTION_COORDINATOR: env.CONNECTION_COORDINATOR,
+      COORDINATOR_NAMESPACE_KEY: 'test-only-coordinator-namespace-key-material',
+    },
+    row.tenant_id,
+    connectionId,
+  );
+  const lease = await coordinator.stub.acquire({
+    ownerDigest: coordinator.ownerDigest,
+    revocationVersion: 0,
+    jobId: 'install-test-credential',
+    kind: 'connect',
+    ttlSeconds: 60,
+  });
+  if (lease.status !== 'acquired') throw new Error('Unable to initialize test coordinator');
+  await coordinator.stub.storeCredential(coordinator.ownerDigest, {
+    accessToken: 'profile-lookup-token',
+    tokenType: 'bearer',
+    issuedAt: '2026-07-19T00:00:00.000Z',
+    expiresAt: '2099-07-19T00:00:00.000Z',
+    scopes: ['threads_basic', 'threads_profile_discovery'],
+    identity: { platformUserId: 'owner-platform-id', username: 'willseed' },
+  });
+  await coordinator.stub.release(
+    coordinator.ownerDigest,
+    'install-test-credential',
+    lease.generation,
+  );
 }
 
 describe('connection and manual candidate API', () => {
@@ -167,5 +211,41 @@ describe('connection and manual candidate API', () => {
     );
 
     expect(response.status).toBe(404);
+  });
+
+  it('refreshes one candidate through its credential-owning coordinator', async () => {
+    const connection = await createConnection();
+    await installConnectedCredential(connection.id);
+    const app = applicationFor('idp|owner');
+    const createResponse = await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'will.seed' }),
+      },
+      env,
+    );
+    const candidate = (await createResponse.json<{ candidate: { id: string } }>()).candidate;
+
+    const response = await app.request(
+      `/api/connections/${connection.id}/candidates/${candidate.id}/refresh`,
+      { method: 'POST' },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json<{
+      lookup: unknown;
+      candidate: { status: string; priority: string };
+    }>();
+    expect(body).toMatchObject({
+      lookup: {
+        status: 'found',
+        profile: { username: 'will.seed', displayName: 'Will Seed' },
+      },
+      candidate: { status: 'pending_review', priority: 'medium' },
+    });
+    expect(JSON.stringify(body)).not.toContain('profile-lookup-token');
   });
 });
