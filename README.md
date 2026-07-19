@@ -66,6 +66,8 @@ Wrangler 設定使用 automatic provisioning：首次 deploy 時會為只宣告 
 
 R2 bucket 綁定名稱為 `EVIDENCE`，不可啟用 public `r2.dev` 網址。證據限定 5 MiB 與 allowlist MIME，寫入時計算 SHA-256 並使用不可預測 key；D1 只保存索引。讀取與刪除每次都重新驗證 tenant membership，刪除後保留最小 tombstone 與稽核，不回傳任何 bucket public URL。
 
+`GET|DELETE /api/evidence/:evidenceId` 需要近期應用身分再驗證。讀取回應固定為 `Cache-Control: private, no-store`、`X-Content-Type-Options: nosniff` 與嚴格 CSP；跨租戶要求只回傳 404。
+
 ## 每連線協調器
 
 `ConnectionCoordinator` 是 SQLite-backed Durable Object。控制平面以不可猜測 connection ID 路由，並另外綁定 owner digest。它持久化 lease generation、工作類型、逾時與 revocation version；同一 connection 同時只能有一個登入、掃描、人工接管或封鎖工作，撤銷後舊版本要求一律失效。

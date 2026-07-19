@@ -17,6 +17,7 @@ export interface AppBindings {
   META_APP_ID?: string;
   META_APP_SECRET?: string;
   META_GRAPH_API_VERSION?: string;
+  REAUTH_MAX_AGE_SECONDS?: string;
   SESSION_ENCRYPTION_KEY?: string;
 }
 

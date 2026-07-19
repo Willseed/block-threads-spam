@@ -5,6 +5,7 @@ import type { AppEnvironment } from './environment';
 import { requireIdentity } from './identity/middleware';
 import type { IdentityVerifier } from './identity/types';
 import { connectionRoutes } from './routes/connections';
+import { evidenceRoutes } from './routes/evidence';
 import { requireTenant } from './tenant/middleware';
 import type { RepositoryFactory } from './tenant/middleware';
 
@@ -38,6 +39,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
 
   application.route('/api/connections', connectionRoutes);
+  application.route('/api/evidence', evidenceRoutes);
 
   application.notFound((context) => {
     if (context.req.path.startsWith('/api/')) {
