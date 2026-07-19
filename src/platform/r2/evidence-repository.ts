@@ -49,6 +49,10 @@ interface EvidenceRow {
   retention_until: string;
 }
 
+interface EvidenceKeyRow {
+  r2_key: string;
+}
+
 interface EvidenceRepositoryOptions {
   idFactory?: () => string;
   now?: () => Date;
@@ -279,5 +283,24 @@ export class R2EvidenceRepository {
         ),
     ]);
     return result[0].meta.changes === 1;
+  }
+
+  async purgeConnection(tenant: TenantContext, connectionId: string): Promise<number> {
+    const { results } = await this.#db
+      .prepare(
+        `SELECT r2_key
+         FROM evidence_objects
+         WHERE tenant_id = ? AND connection_id = ? AND deleted_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )`,
+      )
+      .bind(tenant.tenantId, connectionId, tenant.tenantId, tenant.userId)
+      .all<EvidenceKeyRow>();
+    const keys = results.map(({ r2_key: key }) => key);
+    for (let index = 0; index < keys.length; index += 1000) {
+      await this.#bucket.delete(keys.slice(index, index + 1000));
+    }
+    return keys.length;
   }
 }

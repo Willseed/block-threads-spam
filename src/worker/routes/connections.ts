@@ -8,8 +8,10 @@ import {
   CandidateAlreadyExistsError,
   TenantAuthorizationError,
 } from '../../platform/d1/repository';
+import { R2EvidenceRepository } from '../../platform/r2/evidence-repository';
 import type { AppEnvironment } from '../environment';
 import { connectionCoordinator } from '../coordinator';
+import { requireRecentAuthentication } from '../identity/reauthentication';
 
 const connectionInput = z.object({
   protectedUsername: z.string().min(1).max(31),
@@ -24,6 +26,10 @@ const generationInput = z.object({
   enabledRules: z.array(z.enum(VARIANT_RULES)).max(VARIANT_RULES.length).optional(),
   totalLimit: z.number().int().min(1).max(100).default(80),
   perRuleLimit: z.number().int().min(1).max(20).default(12),
+});
+
+const revocationInput = z.object({
+  dataRetention: z.enum(['retain', 'delete']),
 });
 
 function validationError() {
@@ -58,6 +64,83 @@ connectionRoutes.post('/', async (context) => {
     .get('repository')
     .createConnection(context.get('tenant'), protectedUsername, parsed.data.connectionMode);
   return context.json({ connection }, 201);
+});
+
+connectionRoutes.delete('/:connectionId', requireRecentAuthentication, async (context) => {
+  const body: unknown = await context.req.json().catch(() => undefined);
+  const parsed = revocationInput.safeParse(body);
+  if (!parsed.success) return context.json(validationError(), 400);
+
+  const tenant = context.get('tenant');
+  const repository = context.get('repository');
+  const connectionId = context.req.param('connectionId');
+  const connection = await repository.beginConnectionRevocation(tenant, connectionId);
+  if (!connection) {
+    return context.json(
+      { error: { code: 'not_found', message: '找不到指定的 Threads 連線。' } },
+      404,
+    );
+  }
+  const deleteRetainedData = parsed.data.dataRetention === 'delete';
+
+  if (connection.status === 'revoked') {
+    if (deleteRetainedData) {
+      const evidence = new R2EvidenceRepository(context.env.DB, context.env.EVIDENCE);
+      await evidence.purgeConnection(tenant, connectionId);
+      const updated = await repository.completeConnectionRevocation(
+        tenant,
+        connectionId,
+        connection.revocationVersion,
+        true,
+      );
+      return context.json({ connection: updated });
+    }
+    return context.json({ connection });
+  }
+
+  let coordinator;
+  try {
+    coordinator = await connectionCoordinator(context.env, tenant.tenantId, connectionId);
+  } catch {
+    return context.json(
+      { error: { code: 'service_unavailable', message: '目前無法安全中斷 Threads 連線。' } },
+      503,
+    );
+  }
+  const nextVersion = await coordinator.stub.revoke(
+    coordinator.ownerDigest,
+    connection.revocationVersion,
+  );
+  if (nextVersion === undefined) {
+    return context.json(
+      { error: { code: 'revocation_conflict', message: '連線狀態已變更，請重新載入。' } },
+      409,
+    );
+  }
+
+  try {
+    if (deleteRetainedData) {
+      const evidence = new R2EvidenceRepository(context.env.DB, context.env.EVIDENCE);
+      await evidence.purgeConnection(tenant, connectionId);
+    }
+    const revoked = await repository.completeConnectionRevocation(
+      tenant,
+      connectionId,
+      nextVersion,
+      deleteRetainedData,
+    );
+    return context.json({ connection: revoked });
+  } catch {
+    return context.json(
+      {
+        error: {
+          code: 'revocation_pending',
+          message: '憑證已失效，資料清理仍在進行；請稍後重試。',
+        },
+      },
+      503,
+    );
+  }
 });
 
 connectionRoutes.get('/:connectionId/candidates', async (context) => {

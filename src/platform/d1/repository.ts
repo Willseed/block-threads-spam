@@ -104,6 +104,16 @@ export interface ApplicationRepository {
     connectionId: string,
     expectedUsername: string,
   ): Promise<ThreadsConnectionRecord | undefined>;
+  beginConnectionRevocation(
+    tenant: TenantContext,
+    connectionId: string,
+  ): Promise<ThreadsConnectionRecord | undefined>;
+  completeConnectionRevocation(
+    tenant: TenantContext,
+    connectionId: string,
+    revocationVersion: number,
+    deleteRetainedData: boolean,
+  ): Promise<ThreadsConnectionRecord>;
   addCandidate(
     tenant: TenantContext,
     connectionId: string,
@@ -524,6 +534,125 @@ export class D1Repository implements ApplicationRepository {
     ]);
     if (results[0].meta.changes !== 1) return undefined;
     return this.getConnection(tenant, connectionId);
+  }
+
+  async beginConnectionRevocation(
+    tenant: TenantContext,
+    connectionId: string,
+  ): Promise<ThreadsConnectionRecord | undefined> {
+    const connection = await this.getConnection(tenant, connectionId);
+    if (!connection) return undefined;
+    if (connection.status === 'revoked') return connection;
+    const now = this.#now().toISOString();
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE threads_connections SET status = 'revoking'
+           WHERE id = ? AND tenant_id = ? AND status != 'revoked'
+             AND EXISTS (
+               SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+             )`,
+        )
+        .bind(connectionId, tenant.tenantId, tenant.tenantId, tenant.userId),
+      this.#db
+        .prepare(
+          `UPDATE schedule_preferences SET enabled = 0, next_run_at = NULL, lease_until = NULL
+           WHERE connection_id = ?`,
+        )
+        .bind(connectionId),
+      this.#db
+        .prepare(
+          `UPDATE jobs
+           SET status = CASE WHEN status = 'running' THEN 'needs_review' ELSE 'stopped' END,
+               phase = CASE WHEN status = 'running' THEN 'needs_review' ELSE 'stopped' END,
+               finished_at = ?
+           WHERE tenant_id = ? AND connection_id = ? AND status IN ('received', 'running')`,
+        )
+        .bind(now, tenant.tenantId, connectionId),
+      this.#db
+        .prepare(
+          `UPDATE approvals
+           SET status = CASE WHEN status = 'consuming' THEN 'needs_review' ELSE 'revoked' END
+           WHERE tenant_id = ? AND connection_id = ?
+             AND status IN ('draft', 'awaiting_reauth', 'issued', 'consuming')`,
+        )
+        .bind(tenant.tenantId, connectionId),
+    ]);
+    if (results[0].meta.changes !== 1) return undefined;
+    return this.getConnection(tenant, connectionId);
+  }
+
+  async completeConnectionRevocation(
+    tenant: TenantContext,
+    connectionId: string,
+    revocationVersion: number,
+    deleteRetainedData: boolean,
+  ): Promise<ThreadsConnectionRecord> {
+    if (!Number.isSafeInteger(revocationVersion) || revocationVersion <= 0) {
+      throw new TypeError('Invalid revocation version');
+    }
+    const now = this.#now().toISOString();
+    const statements: D1PreparedStatement[] = [
+      this.#db
+        .prepare(
+          `UPDATE threads_connections
+           SET status = 'revoked', revocation_version = ?, revoked_at = ?
+           WHERE id = ? AND tenant_id = ? AND status IN ('revoking', 'revoked')
+             AND revocation_version <= ?
+             AND EXISTS (
+               SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+             )`,
+        )
+        .bind(
+          revocationVersion,
+          now,
+          connectionId,
+          tenant.tenantId,
+          revocationVersion,
+          tenant.tenantId,
+          tenant.userId,
+        ),
+      this.#db.prepare('DELETE FROM oauth_attempts WHERE connection_id = ?').bind(connectionId),
+      this.#db.prepare('DELETE FROM schedule_preferences WHERE connection_id = ?').bind(connectionId),
+    ];
+    if (deleteRetainedData) {
+      statements.push(
+        this.#db
+          .prepare(
+            `UPDATE evidence_objects SET deleted_at = COALESCE(deleted_at, ?)
+             WHERE tenant_id = ? AND connection_id = ?`,
+          )
+          .bind(now, tenant.tenantId, connectionId),
+        this.#db
+          .prepare('DELETE FROM candidates WHERE tenant_id = ? AND connection_id = ?')
+          .bind(tenant.tenantId, connectionId),
+      );
+    }
+    statements.push(
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, 'connection.revoked', protected_username, ?, ?
+           FROM threads_connections WHERE id = ? AND tenant_id = ? AND status = 'revoked'`,
+        )
+        .bind(
+          `aud_${this.#idFactory()}`,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          JSON.stringify({ retainedDataDeleted: deleteRetainedData }),
+          now,
+          connectionId,
+          tenant.tenantId,
+        ),
+    );
+    const results = await this.#db.batch(statements);
+    if (results[0].meta.changes !== 1) throw new TenantAuthorizationError();
+    const connection = await this.getConnection(tenant, connectionId);
+    if (!connection) throw new TenantAuthorizationError();
+    return connection;
   }
 
   async addCandidate(

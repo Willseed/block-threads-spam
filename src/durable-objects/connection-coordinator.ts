@@ -185,8 +185,22 @@ export class ConnectionCoordinator extends DurableObject<AppBindings> {
 
     return this.ctx.storage.transaction(async (transaction) => {
       const state = await transaction.get<CoordinatorState>(STATE_KEY);
-      if (!state) throw new Error('Coordinator is not initialized');
+      if (!state) {
+        const revokedState: CoordinatorState = {
+          ownerDigest,
+          revocationVersion: expectedVersion + 1,
+          revoked: true,
+          lastGeneration: 0,
+        };
+        await transaction.put(STATE_KEY, revokedState);
+        await transaction.delete(CREDENTIAL_KEY);
+        return revokedState.revocationVersion;
+      }
       if (!ownerMatches(state, ownerDigest)) return undefined;
+      if (state.revoked && state.revocationVersion === expectedVersion + 1) {
+        await transaction.delete(CREDENTIAL_KEY);
+        return state.revocationVersion;
+      }
       if (state.revocationVersion !== expectedVersion) return undefined;
       state.revocationVersion += 1;
       state.revoked = true;

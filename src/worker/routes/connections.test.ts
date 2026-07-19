@@ -5,9 +5,13 @@ import { createApp } from '../index';
 import type { IdentityVerifier } from '../identity/types';
 import { connectionCoordinator } from '../coordinator';
 
-function applicationFor(subject: string) {
+function applicationFor(subject: string, recent = false) {
   const verifier: IdentityVerifier = {
-    verify: () => Promise.resolve({ subject }),
+    verify: () =>
+      Promise.resolve({
+        subject,
+        ...(recent ? { authenticatedAt: new Date().toISOString() } : {}),
+      }),
   };
   return createApp({ identityVerifier: verifier });
 }
@@ -247,5 +251,94 @@ describe('connection and manual candidate API', () => {
       candidate: { status: 'pending_review', priority: 'medium' },
     });
     expect(JSON.stringify(body)).not.toContain('profile-lookup-token');
+  });
+
+  it('revokes active credentials while retaining review records when requested', async () => {
+    const connection = await createConnection();
+    await installConnectedCredential(connection.id);
+    const app = applicationFor('idp|owner', true);
+    const candidateResponse = await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'will.seed' }),
+      },
+      env,
+    );
+    expect(candidateResponse.status).toBe(201);
+
+    const response = await app.request(
+      `/api/connections/${connection.id}`,
+      {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dataRetention: 'retain' }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      connection: { status: 'revoked', revocationVersion: 1 },
+    });
+    const candidates = await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      undefined,
+      env,
+    );
+    await expect(candidates.json()).resolves.toMatchObject({ candidates: [{ username: 'will.seed' }] });
+
+    const tenant = await env.DB.prepare('SELECT tenant_id FROM threads_connections WHERE id = ?')
+      .bind(connection.id)
+      .first<{ tenant_id: string }>();
+    if (!tenant) throw new Error('Missing test tenant');
+    const coordinator = await connectionCoordinator(
+      {
+        CONNECTION_COORDINATOR: env.CONNECTION_COORDINATOR,
+        COORDINATOR_NAMESPACE_KEY: 'test-only-coordinator-namespace-key-material',
+      },
+      tenant.tenant_id,
+      connection.id,
+    );
+    await expect(coordinator.stub.credentialStatus(coordinator.ownerDigest)).resolves.toEqual({
+      connected: false,
+    });
+    await expect(coordinator.stub.status(coordinator.ownerDigest)).resolves.toMatchObject({
+      revoked: true,
+      revocationVersion: 1,
+    });
+  });
+
+  it('deletes candidate records when revocation explicitly requests deletion', async () => {
+    const connection = await createConnection();
+    const app = applicationFor('idp|owner', true);
+    await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'will.seed' }),
+      },
+      env,
+    );
+
+    const response = await app.request(
+      `/api/connections/${connection.id}`,
+      {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dataRetention: 'delete' }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    const remaining = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM candidates WHERE connection_id = ?',
+    )
+      .bind(connection.id)
+      .first<{ count: number }>();
+    expect(remaining?.count).toBe(0);
   });
 });

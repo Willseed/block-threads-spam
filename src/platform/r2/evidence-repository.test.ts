@@ -87,6 +87,28 @@ describe('R2EvidenceRepository', () => {
     await expect(repository.get(owner, record.id)).resolves.toBeUndefined();
   });
 
+  it('purges every private object for one owned connection', async () => {
+    const { owner, connection } = await fixture();
+    const repository = new R2EvidenceRepository(env.DB, env.EVIDENCE, {
+      now: () => new Date('2026-07-19T07:00:00.000Z'),
+    });
+    const record = await repository.put(owner, {
+      connectionId: connection.id,
+      evidenceType: 'diagnostic',
+      source: 'fixture',
+      contentType: 'text/plain',
+      body: new TextEncoder().encode('delete with connection'),
+      retentionUntil: new Date('2026-07-20T07:00:00.000Z'),
+    });
+    const row = await env.DB.prepare('SELECT r2_key FROM evidence_objects WHERE id = ?')
+      .bind(record.id)
+      .first<{ r2_key: string }>();
+    if (!row) throw new Error('Missing evidence fixture');
+
+    await expect(repository.purgeConnection(owner, connection.id)).resolves.toBe(1);
+    await expect(env.EVIDENCE.get(row.r2_key)).resolves.toBeNull();
+  });
+
   it('rejects empty, oversized or expired evidence before writing', async () => {
     const { owner, connection } = await fixture();
     const repository = new R2EvidenceRepository(env.DB, env.EVIDENCE, {
