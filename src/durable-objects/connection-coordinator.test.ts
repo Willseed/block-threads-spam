@@ -3,6 +3,17 @@ import { evictDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 
 const OWNER = 'a'.repeat(64);
+const CREDENTIAL = {
+  accessToken: 'long-lived-secret-token',
+  tokenType: 'bearer' as const,
+  issuedAt: '2026-07-19T00:00:00.000Z',
+  expiresAt: '2026-09-17T00:00:00.000Z',
+  scopes: ['threads_basic', 'threads_profile_discovery'] as const,
+  identity: {
+    platformUserId: '123456789',
+    username: 'official.account',
+  },
+};
 
 function coordinator(name = crypto.randomUUID()) {
   const id = env.CONNECTION_COORDINATOR.idFromName(name);
@@ -135,5 +146,46 @@ describe('ConnectionCoordinator', () => {
     });
 
     await expect(stub.status('b'.repeat(64))).resolves.toBeUndefined();
+  });
+
+  it('stores only non-secret credential metadata through its RPC surface', async () => {
+    const stub = coordinator();
+    await stub.acquire({
+      ownerDigest: OWNER,
+      revocationVersion: 0,
+      jobId: 'connect-vault',
+      kind: 'connect',
+      ttlSeconds: 60,
+    });
+
+    await expect(stub.storeCredential(OWNER, CREDENTIAL)).resolves.toEqual({
+      connected: true,
+      platformUserId: '123456789',
+      username: 'official.account',
+      expiresAt: CREDENTIAL.expiresAt,
+    });
+    await expect(stub.credentialStatus(OWNER)).resolves.toMatchObject({
+      connected: true,
+      username: 'official.account',
+    });
+    await expect(stub.credentialStatus('b'.repeat(64))).resolves.toBeUndefined();
+  });
+
+  it('cryptographically deletes the credential on clear and revoke', async () => {
+    const stub = coordinator();
+    await stub.acquire({
+      ownerDigest: OWNER,
+      revocationVersion: 0,
+      jobId: 'connect-delete',
+      kind: 'connect',
+      ttlSeconds: 60,
+    });
+    await stub.storeCredential(OWNER, CREDENTIAL);
+
+    await expect(stub.clearCredential(OWNER)).resolves.toBe(true);
+    await expect(stub.credentialStatus(OWNER)).resolves.toEqual({ connected: false });
+    await stub.storeCredential(OWNER, CREDENTIAL);
+    await expect(stub.revoke(OWNER, 0)).resolves.toBe(1);
+    await expect(stub.credentialStatus(OWNER)).resolves.toEqual({ connected: false });
   });
 });

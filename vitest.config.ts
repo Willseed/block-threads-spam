@@ -7,6 +7,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations('./migrations'),
+          SESSION_ENCRYPTION_KEY: 'ERERERERERERERERERERERERERERERERERERERERERE',
         },
         d1Databases: ['DB'],
         r2Buckets: ['EVIDENCE'],

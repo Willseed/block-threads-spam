@@ -74,6 +74,8 @@ R2 bucket 綁定名稱為 `EVIDENCE`，不可啟用 public `r2.dev` 網址。證
 
 `ConnectionCoordinator` 是 SQLite-backed Durable Object。控制平面以不可猜測 connection ID 路由，並另外綁定 owner digest。它持久化 lease generation、工作類型、逾時與 revocation version；同一 connection 同時只能有一個登入、掃描、人工接管或封鎖工作，撤銷後舊版本要求一律失效。
 
+Threads 長效 token 只保存在該連線的 Durable Object 內，使用隨機 per-connection DEK 與 AES-GCM 加密，再由部署 secret 提供的 KEK 包裝。RPC 只回傳非機密的連線 metadata，不提供 token 匯出；中斷連線與 revoke 都會刪除密文及被包裝的 DEK。
+
 ## 狀態機
 
 候選、工作與批准 transition 全部採明確白名單。封鎖執行中或 approval consuming 後若結果不明，只能進入 `needs_review`，不能回到可自動重試的狀態。對使用者的動作結果固定為「確認成功、已停止未執行、結果不明待複查」三類。

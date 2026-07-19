@@ -1,6 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 
+import type { ThreadsOAuthCredential } from '../adapters/threads-oauth/types';
 import type { AppBindings } from '../worker/environment';
+import { encryptCredential, type EncryptedThreadsCredential } from './credential-vault';
 
 export type ConnectionJobKind =
   | 'connect'
@@ -56,6 +58,14 @@ export interface CoordinatorStatus {
 }
 
 const STATE_KEY = 'coordinator-state';
+const CREDENTIAL_KEY = 'threads-credential-v1';
+
+export interface CredentialStatus {
+  connected: boolean;
+  platformUserId?: string;
+  username?: string;
+  expiresAt?: string;
+}
 
 function assertOwnerDigest(value: string): void {
   if (!/^[a-f0-9]{64}$/.test(value)) throw new TypeError('Invalid owner digest');
@@ -176,8 +186,52 @@ export class ConnectionCoordinator extends DurableObject<AppBindings> {
       state.revoked = true;
       delete state.lease;
       await transaction.put(STATE_KEY, state);
+      await transaction.delete(CREDENTIAL_KEY);
       return state.revocationVersion;
     });
+  }
+
+  async storeCredential(
+    ownerDigest: string,
+    credential: ThreadsOAuthCredential,
+  ): Promise<CredentialStatus | undefined> {
+    assertOwnerDigest(ownerDigest);
+    const state = await this.ctx.storage.get<CoordinatorState>(STATE_KEY);
+    if (!state || !ownerMatches(state, ownerDigest) || state.revoked) return undefined;
+
+    const encrypted = await encryptCredential(
+      ownerDigest,
+      credential,
+      this.env.SESSION_ENCRYPTION_KEY,
+    );
+    await this.ctx.storage.put(CREDENTIAL_KEY, encrypted);
+    return {
+      connected: true,
+      platformUserId: encrypted.identity.platformUserId,
+      username: encrypted.identity.username,
+      expiresAt: encrypted.expiresAt,
+    };
+  }
+
+  async credentialStatus(ownerDigest: string): Promise<CredentialStatus | undefined> {
+    assertOwnerDigest(ownerDigest);
+    const state = await this.ctx.storage.get<CoordinatorState>(STATE_KEY);
+    if (!state || !ownerMatches(state, ownerDigest)) return undefined;
+    const credential = await this.ctx.storage.get<EncryptedThreadsCredential>(CREDENTIAL_KEY);
+    if (!credential) return { connected: false };
+    return {
+      connected: true,
+      platformUserId: credential.identity.platformUserId,
+      username: credential.identity.username,
+      expiresAt: credential.expiresAt,
+    };
+  }
+
+  async clearCredential(ownerDigest: string): Promise<boolean> {
+    assertOwnerDigest(ownerDigest);
+    const state = await this.ctx.storage.get<CoordinatorState>(STATE_KEY);
+    if (!state || !ownerMatches(state, ownerDigest)) return false;
+    return this.ctx.storage.delete(CREDENTIAL_KEY);
   }
 
   async status(ownerDigest: string): Promise<CoordinatorStatus | undefined> {
