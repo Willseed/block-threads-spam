@@ -40,6 +40,7 @@ export default defineConfig({
           META_APP_SECRET: 'test-meta-app-secret',
           FEATURE_META_PROFILE_LOOKUP: 'true',
           FEATURE_MANUAL_BLOCK_HANDOFF: 'true',
+          FEATURE_BROWSER_LIVE_VIEW: 'true',
         },
         d1Databases: ['DB'],
         r2Buckets: ['EVIDENCE'],

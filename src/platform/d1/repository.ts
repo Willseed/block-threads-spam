@@ -37,6 +37,7 @@ export interface NewOAuthAttempt extends OAuthAttemptRecord {
   stateHash: string;
   sessionBinding: string;
   expiresAt: string;
+  leaseGeneration: number;
 }
 
 export interface CandidateRecord {
@@ -77,6 +78,41 @@ export interface AuditEventRecord {
   eventType: string;
   targetRef?: string;
   createdAt: string;
+}
+
+export interface ConsumedApproval {
+  id: string;
+  connectionId: string;
+  candidateId: string;
+  exactTargetUsername: string;
+  targetPlatformId: string;
+  evidenceVersion: string;
+}
+
+export interface NewBrowserHandoff {
+  id: string;
+  jobId: string;
+  approval: ConsumedApproval;
+  browserSessionId: string;
+  targetId: string;
+  exchangeTokenHash: string;
+  sessionBinding: string;
+  expiresAt: string;
+  leaseGeneration: number;
+}
+
+export interface ClaimedBrowserHandoff {
+  id: string;
+  jobId: string;
+  connectionId: string;
+  candidateId: string;
+  approvalId: string;
+  browserSessionId: string;
+  targetId: string;
+  exactTargetUsername: string;
+  targetPlatformId: string;
+  expiresAt: string;
+  leaseGeneration: number;
 }
 
 export interface NewCandidate {
@@ -171,6 +207,28 @@ export interface ApplicationRepository {
     tenant: TenantContext,
     options?: { connectionId?: string; limit?: number },
   ): Promise<AuditEventRecord[]>;
+  consumeApproval(
+    tenant: TenantContext,
+    approvalId: string,
+    nonceHash: string,
+    sessionBinding: string,
+  ): Promise<ConsumedApproval | undefined>;
+  createBrowserHandoff(tenant: TenantContext, input: NewBrowserHandoff): Promise<void>;
+  claimBrowserHandoff(
+    tenant: TenantContext,
+    handoffId: string,
+    exchangeTokenHash: string,
+    sessionBinding: string,
+  ): Promise<ClaimedBrowserHandoff | undefined>;
+  markHandoffCapabilityIssued(
+    tenant: TenantContext,
+    handoffId: string,
+  ): Promise<boolean>;
+  failHandoffBeforeIssue(
+    tenant: TenantContext,
+    approvalId: string,
+    handoffId?: string,
+  ): Promise<void>;
   addGeneratedCandidates(
     tenant: TenantContext,
     connectionId: string,
@@ -212,6 +270,29 @@ interface AuditEventRow {
   event_type: string;
   target_ref: string | null;
   created_at: string;
+}
+
+interface ConsumedApprovalRow {
+  id: string;
+  connection_id: string;
+  candidate_id: string;
+  exact_target_username: string;
+  target_platform_id: string;
+  evidence_version: string;
+}
+
+interface BrowserHandoffRow {
+  id: string;
+  job_id: string;
+  connection_id: string;
+  candidate_id: string;
+  approval_id: string;
+  browser_session_id: string;
+  target_id: string;
+  exact_target_username: string;
+  target_platform_id: string;
+  expires_at: string;
+  lease_generation: number;
 }
 
 interface CandidateRow {
@@ -1194,6 +1275,247 @@ export class D1Repository implements ApplicationRepository {
       ...(row.target_ref ? { targetRef: row.target_ref } : {}),
       createdAt: row.created_at,
     }));
+  }
+
+  async consumeApproval(
+    tenant: TenantContext,
+    approvalId: string,
+    nonceHash: string,
+    sessionBinding: string,
+  ): Promise<ConsumedApproval | undefined> {
+    if (!/^[a-f0-9]{64}$/u.test(nonceHash) || !/^[a-f0-9]{64}$/u.test(sessionBinding)) {
+      return undefined;
+    }
+    const now = this.#now().toISOString();
+    const row = await this.#db
+      .prepare(
+        `UPDATE approvals SET status = 'consuming'
+         WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'issued'
+           AND nonce_hash = ? AND session_binding = ? AND expires_at > ?
+           AND EXISTS (
+             SELECT 1 FROM threads_connections
+             WHERE id = approvals.connection_id AND tenant_id = ? AND status = 'connected'
+           )
+           AND EXISTS (
+             SELECT 1 FROM candidates
+             WHERE id = approvals.candidate_id AND tenant_id = ?
+               AND connection_id = approvals.connection_id AND status = 'preparing_block'
+               AND current_snapshot_id = approvals.evidence_version
+           )
+         RETURNING id, connection_id, candidate_id, exact_target_username,
+                   target_platform_id, evidence_version`,
+      )
+      .bind(
+        approvalId,
+        tenant.tenantId,
+        tenant.userId,
+        nonceHash,
+        sessionBinding,
+        now,
+        tenant.tenantId,
+        tenant.tenantId,
+      )
+      .first<ConsumedApprovalRow>();
+    return row
+      ? {
+          id: row.id,
+          connectionId: row.connection_id,
+          candidateId: row.candidate_id,
+          exactTargetUsername: row.exact_target_username,
+          targetPlatformId: row.target_platform_id,
+          evidenceVersion: row.evidence_version,
+        }
+      : undefined;
+  }
+
+  async createBrowserHandoff(tenant: TenantContext, input: NewBrowserHandoff): Promise<void> {
+    const now = this.#now().toISOString();
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `INSERT INTO jobs
+             (id, tenant_id, connection_id, job_type, scope_hash, status, phase,
+              idempotency_key_hash, created_at, started_at)
+           SELECT ?, ?, ?, 'manual_block', ?, 'running', 'connection_verified', ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM approvals
+             WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'consuming'
+           )`,
+        )
+        .bind(
+          input.jobId,
+          tenant.tenantId,
+          input.approval.connectionId,
+          input.approval.id,
+          input.approval.id,
+          now,
+          now,
+          input.approval.id,
+          tenant.tenantId,
+          tenant.userId,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO browser_handoffs
+             (id, tenant_id, connection_id, job_id, browser_session_id, target_id,
+              exchange_token_hash, status, expires_at, approval_id, user_id, session_binding,
+              exact_target_username, target_platform_id, lease_generation)
+           SELECT ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?
+           WHERE EXISTS (SELECT 1 FROM jobs WHERE id = ? AND tenant_id = ?)`,
+        )
+        .bind(
+          input.id,
+          tenant.tenantId,
+          input.approval.connectionId,
+          input.jobId,
+          input.browserSessionId,
+          input.targetId,
+          input.exchangeTokenHash,
+          input.expiresAt,
+          input.approval.id,
+          tenant.userId,
+          input.sessionBinding,
+          input.approval.exactTargetUsername,
+          input.approval.targetPlatformId,
+          input.leaseGeneration,
+          input.jobId,
+          tenant.tenantId,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, job_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, ?, 'handoff.created', ?, '{}', ?
+           WHERE EXISTS (SELECT 1 FROM browser_handoffs WHERE id = ? AND tenant_id = ?)`,
+        )
+        .bind(
+          `aud_${this.#idFactory()}`,
+          tenant.tenantId,
+          tenant.userId,
+          input.approval.connectionId,
+          input.jobId,
+          input.approval.exactTargetUsername,
+          now,
+          input.id,
+          tenant.tenantId,
+        ),
+    ]);
+    if (results.some(({ meta }) => meta.changes !== 1)) {
+      throw new ApprovalPreconditionError();
+    }
+  }
+
+  async claimBrowserHandoff(
+    tenant: TenantContext,
+    handoffId: string,
+    exchangeTokenHash: string,
+    sessionBinding: string,
+  ): Promise<ClaimedBrowserHandoff | undefined> {
+    const now = this.#now().toISOString();
+    const row = await this.#db
+      .prepare(
+        `UPDATE browser_handoffs SET status = 'exchanged', exchanged_at = ?
+         WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'created'
+           AND exchange_token_hash = ? AND session_binding = ? AND expires_at > ?
+           AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )
+         RETURNING id, job_id, connection_id,
+           (SELECT candidate_id FROM approvals WHERE id = browser_handoffs.approval_id) AS candidate_id,
+           approval_id, browser_session_id, target_id, exact_target_username,
+           target_platform_id, expires_at, lease_generation`,
+      )
+      .bind(
+        now,
+        handoffId,
+        tenant.tenantId,
+        tenant.userId,
+        exchangeTokenHash,
+        sessionBinding,
+        now,
+        tenant.tenantId,
+        tenant.userId,
+      )
+      .first<BrowserHandoffRow>();
+    return row
+      ? {
+          id: row.id,
+          jobId: row.job_id,
+          connectionId: row.connection_id,
+          candidateId: row.candidate_id,
+          approvalId: row.approval_id,
+          browserSessionId: row.browser_session_id,
+          targetId: row.target_id,
+          exactTargetUsername: row.exact_target_username,
+          targetPlatformId: row.target_platform_id,
+          expiresAt: row.expires_at,
+          leaseGeneration: row.lease_generation,
+        }
+      : undefined;
+  }
+
+  async markHandoffCapabilityIssued(
+    tenant: TenantContext,
+    handoffId: string,
+  ): Promise<boolean> {
+    const now = this.#now().toISOString();
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE browser_handoffs
+           SET status = 'active', capability_issued_at = ?
+           WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'exchanged'`,
+        )
+        .bind(now, handoffId, tenant.tenantId, tenant.userId),
+      this.#db
+        .prepare(
+          `UPDATE candidates SET status = 'blocking'
+           WHERE id = (
+             SELECT approvals.candidate_id FROM approvals
+             JOIN browser_handoffs ON browser_handoffs.approval_id = approvals.id
+             WHERE browser_handoffs.id = ? AND browser_handoffs.tenant_id = ?
+           ) AND tenant_id = ? AND status = 'preparing_block'`,
+        )
+        .bind(handoffId, tenant.tenantId, tenant.tenantId),
+    ]);
+    return results.every(({ meta }) => meta.changes === 1);
+  }
+
+  async failHandoffBeforeIssue(
+    tenant: TenantContext,
+    approvalId: string,
+    handoffId?: string,
+  ): Promise<void> {
+    const now = this.#now().toISOString();
+    await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE approvals SET status = 'revoked'
+           WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'consuming'`,
+        )
+        .bind(approvalId, tenant.tenantId, tenant.userId),
+      this.#db
+        .prepare(
+          `UPDATE candidates SET status = 'pending_review'
+           WHERE id = (SELECT candidate_id FROM approvals WHERE id = ? AND tenant_id = ?)
+             AND tenant_id = ? AND status = 'preparing_block'`,
+        )
+        .bind(approvalId, tenant.tenantId, tenant.tenantId),
+      this.#db
+        .prepare(
+          `UPDATE browser_handoffs SET status = 'cancelled', terminated_at = ?
+           WHERE id = ? AND tenant_id = ? AND status IN ('created', 'exchanged')`,
+        )
+        .bind(now, handoffId ?? '', tenant.tenantId),
+      this.#db
+        .prepare(
+          `UPDATE jobs SET status = 'stopped', phase = 'stopped', finished_at = ?
+           WHERE id = (SELECT job_id FROM browser_handoffs WHERE id = ? AND tenant_id = ?)
+             AND tenant_id = ? AND status = 'running'`,
+        )
+        .bind(now, handoffId ?? '', tenant.tenantId, tenant.tenantId),
+    ]);
   }
 
   async addGeneratedCandidates(

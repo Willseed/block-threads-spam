@@ -9,6 +9,8 @@ import { activityRoutes } from './routes/activity';
 import { evidenceRoutes } from './routes/evidence';
 import { oauthCallbackRoutes, oauthConnectionRoutes } from './routes/oauth';
 import type { OAuthClientFactory } from './routes/oauth';
+import type { BrowserHandoffProvider } from '../adapters/browser-handoff/types';
+import { createHandoffRoutes } from './routes/handoffs';
 import { requireTenant } from './tenant/middleware';
 import type { RepositoryFactory } from './tenant/middleware';
 
@@ -16,6 +18,7 @@ export interface AppDependencies {
   identityVerifier?: IdentityVerifier;
   repositoryFactory?: RepositoryFactory;
   oauthClientFactory?: OAuthClientFactory;
+  browserHandoffProvider?: BrowserHandoffProvider;
 }
 
 export function createApp(dependencies: AppDependencies = {}) {
@@ -52,6 +55,10 @@ export function createApp(dependencies: AppDependencies = {}) {
   );
   application.route('/api/evidence', evidenceRoutes);
   application.route('/api/activity', activityRoutes);
+  application.route(
+    '/api/handoffs',
+    createHandoffRoutes(dependencies.browserHandoffProvider),
+  );
   application.route('/auth/threads', oauthCallbackRoutes(dependencies.oauthClientFactory));
 
   application.notFound((context) => {
