@@ -6,7 +6,7 @@ function testOutboundService(request: Request): Response {
   if (
     url.origin !== 'https://graph.threads.net' ||
     url.pathname !== '/v1.0/profile_lookup' ||
-    !['long-lived-secret-token', 'profile-lookup-token'].includes(
+    !['long-lived-secret-token', 'profile-lookup-token', 'scheduled-profile-token'].includes(
       url.searchParams.get('access_token') ?? '',
     )
   ) {

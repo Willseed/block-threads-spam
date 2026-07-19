@@ -13,6 +13,7 @@ import type { BrowserHandoffProvider } from '../adapters/browser-handoff/types';
 import { createHandoffRoutes } from './routes/handoffs';
 import { requireTenant } from './tenant/middleware';
 import type { RepositoryFactory } from './tenant/middleware';
+import { runScheduledScans } from './scheduled';
 
 export interface AppDependencies {
   identityVerifier?: IdentityVerifier;
@@ -81,5 +82,12 @@ export function createApp(dependencies: AppDependencies = {}) {
 
 export const app = createApp();
 
-export default app;
+const worker: ExportedHandler<AppEnvironment['Bindings']> = {
+  fetch: app.fetch,
+  scheduled(_controller, bindings, executionContext) {
+    executionContext.waitUntil(runScheduledScans(bindings));
+  },
+};
+
+export default worker;
 export { ConnectionCoordinator } from '../durable-objects/connection-coordinator';

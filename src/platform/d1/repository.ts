@@ -1014,7 +1014,9 @@ export class D1Repository implements ApplicationRepository {
             `UPDATE candidates
              SET current_snapshot_id = ?, last_checked_at = ?, priority = ?,
                  status = CASE
-                   WHEN status IN ('new', 'pending_review', 'not_found', 'lookup_unavailable')
+                   WHEN status IN (
+                     'new', 'pending_review', 'watching', 'ignored', 'not_found', 'lookup_unavailable'
+                   )
                    THEN 'pending_review'
                    ELSE status
                  END
@@ -1037,7 +1039,9 @@ export class D1Repository implements ApplicationRepository {
             `UPDATE candidates
              SET last_checked_at = ?,
                  status = CASE
-                   WHEN status IN ('new', 'pending_review', 'not_found', 'lookup_unavailable')
+                   WHEN status IN (
+                     'new', 'pending_review', 'watching', 'not_found', 'lookup_unavailable'
+                   )
                    THEN ?
                    ELSE status
                  END

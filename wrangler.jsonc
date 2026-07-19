@@ -37,6 +37,9 @@
   "observability": {
     "enabled": true
   },
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
   "durable_objects": {
     "bindings": [
       {
