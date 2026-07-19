@@ -230,6 +230,21 @@ function CandidateList({
     }
   }
 
+  async function refreshCandidate(candidateId: string) {
+    if (!connection) return;
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await api.refreshCandidate(connection.id, candidateId);
+      setMessage('已更新這個候選的官方公開資料與審核優先級。');
+      await onRefresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '目前無法更新候選。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Review queue" title="候選帳號">
@@ -289,6 +304,15 @@ function CandidateList({
                       >
                         恢復監看
                       </button>
+                    ) : candidate.status === 'new' ? (
+                      <button
+                        className="button ghost"
+                        type="button"
+                        disabled={busy || connection.status !== 'connected'}
+                        onClick={() => void refreshCandidate(candidate.id)}
+                      >
+                        {connection.status === 'connected' ? '載入證據' : '等待連線'}
+                      </button>
                     ) : ['pending_review', 'watching', 'not_found', 'lookup_unavailable'].includes(
                         candidate.status,
                       ) ? (
@@ -333,6 +357,20 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
 
+  useEffect(() => {
+    const result = new URLSearchParams(window.location.search).get('oauth');
+    if (!result) return;
+    setMessage(
+      result === 'pending_confirmation'
+        ? 'Threads 已授權；請核對下方官方帳號後完成確認。'
+        : result === 'cancelled'
+          ? '你已取消 Threads 授權，沒有保存新憑證。'
+          : 'Threads 授權未完成，請重新開始。',
+    );
+    window.history.replaceState({}, '', '/connections');
+    void onCreated();
+  }, [onCreated]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!username.trim()) return;
@@ -345,6 +383,32 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
       await onCreated();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '無法建立帳號。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startOAuth(connectionId: string) {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const result = await api.startOAuth(connectionId);
+      window.location.assign(result.authorizationUrl);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '目前無法開始 Threads OAuth。');
+      setBusy(false);
+    }
+  }
+
+  async function confirmOAuth(connection: Connection) {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await api.confirmOAuth(connection.id, connection.protectedUsername);
+      setMessage(`已確認並開始保護 @${connection.protectedUsername}。`);
+      await onCreated();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '目前無法確認 Threads 身分。');
     } finally {
       setBusy(false);
     }
@@ -393,6 +457,27 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
                 <small>建立於 {formatDate(connection.createdAt)}</small>
               </div>
               <span className="status-pill">{STATUS_LABELS[connection.status]}</span>
+              {connection.status === 'awaiting_identity_confirmation' ? (
+                connection.platformUserId ? (
+                  <button
+                    className="button primary"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void confirmOAuth(connection)}
+                  >
+                    確認保護 @{connection.protectedUsername}
+                  </button>
+                ) : (
+                  <button
+                    className="button secondary"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void startOAuth(connection.id)}
+                  >
+                    連線 Threads OAuth
+                  </button>
+                )
+              ) : null}
             </article>
           ))}
         </section>

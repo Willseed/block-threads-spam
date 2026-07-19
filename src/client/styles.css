@@ -106,7 +106,7 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
 .boundary-card li { padding-bottom: .75rem; border-bottom: 1px solid rgb(255 255 255 / 10%); color: #c9cec9; font-size: .82rem; }
 .connection-list { margin-top: 2.5rem; }
 .connection-list > h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .1em; }
-.connection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 1rem; padding: 1rem 1.2rem; }
+.connection-row { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 1rem; padding: 1rem 1.2rem; }
 .connection-symbol { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border-radius: .7rem; color: white; background: var(--ink); }
 .connection-row small { display: block; margin-top: .25rem; color: var(--muted); }
 .status-pill { padding: .35rem .6rem; border-radius: 999px; color: #765125; background: #f0e4ca; font-size: .68rem; }
@@ -161,4 +161,6 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
   .inline-form > div { min-width: 100%; }
   .candidate-card { grid-template-columns: auto 1fr; }
   .candidate-actions { grid-column: 2; justify-content: flex-start; }
+  .connection-row { grid-template-columns: auto 1fr; }
+  .connection-row .status-pill, .connection-row .button { grid-column: 2; justify-self: start; }
 }

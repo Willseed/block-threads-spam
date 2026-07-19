@@ -7,6 +7,7 @@ export interface Identity {
 export interface Connection {
   id: string;
   protectedUsername: string;
+  platformUserId?: string;
   connectionMode: 'meta_oauth' | 'manual_handoff';
   status:
     | 'awaiting_identity_confirmation'
@@ -16,6 +17,8 @@ export interface Connection {
     | 'revoking'
     | 'revoked';
   createdAt: string;
+  revocationVersion: number;
+  lastVerifiedAt?: string;
 }
 
 export interface Candidate {
@@ -89,6 +92,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ totalLimit: 80, perRuleLimit: 12 }),
     }),
+  refreshCandidate: (connectionId: string, candidateId: string) =>
+    request<{ candidate: Candidate }>(
+      `/api/connections/${connectionId}/candidates/${candidateId}/refresh`,
+      { method: 'POST' },
+    ),
   decideCandidate: (
     connectionId: string,
     candidateId: string,
@@ -102,4 +110,14 @@ export const api = {
       },
     ),
   activity: () => request<{ events: ActivityEvent[] }>('/api/activity?limit=50'),
+  startOAuth: (connectionId: string) =>
+    request<{ authorizationUrl: string; expiresAt: string }>(
+      `/api/connections/${connectionId}/oauth/start`,
+      { method: 'POST' },
+    ),
+  confirmOAuth: (connectionId: string, username: string) =>
+    request<{ connection: Connection }>(`/api/connections/${connectionId}/oauth/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    }),
 };
