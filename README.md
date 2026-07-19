@@ -66,6 +66,8 @@ Wrangler 設定使用 automatic provisioning：首次 deploy 時會為只宣告 
 
 Browser Live View 目前仍是 Beta，且無法硬性鎖定單一 Threads username；production 因此使用 fail-closed handoff provider。經部署環境整合驗證後，可注入 provider 使用 `POST /api/handoffs`：回應只包含安全 enter path，交換 token 放在 `HttpOnly` `__Host-` cookie；`POST .../enter` 原子消耗後才以 `303` 導向 `live.browser.run`。Live View URL、browser session ID 與 capability 不會進 JSON、前端 state 或稽核 metadata，重放一律拒絕。
 
+使用者完成 Live View 人工操作後，只能呼叫 `POST /api/handoffs/:id/complete` 要求驗證；provider 介面沒有封鎖或重試方法。只有目標身分與 UI 都明確符合才記為 `confirmed_success`，其他情況一律把候選、批准與工作置為 `needs_review`，回傳 `unknown_needs_review`，同時關閉 browser session 並釋放帳號鎖。
+
 ## Threads 個人檔案查詢
 
 候選存在性與公開摘要採官方 `GET /profile_lookup?username=...` adapter，所需權限為 `threads_profile_discovery`。Adapter 只查一個已驗證的完整 username，並將 provider 結果縮減成 allowlist 欄位。權限不足、限流、回應格式變更或 target 不一致都會回傳明確的不可用分類；production 預設 adapter 不會降級成 Threads 網頁爬取。

@@ -266,5 +266,72 @@ export function createHandoffRoutes(injectedProvider?: BrowserHandoffProvider) {
     }
   });
 
+  routes.post('/:handoffId/complete', async (context) => {
+    const identity = context.get('identity');
+    const origin = expectedOrigin(context.env.APP_ORIGIN);
+    if (!origin || context.req.header('origin') !== origin || !identity.sessionBinding) {
+      return context.json(
+        { error: { code: 'handoff_invalid', message: '人工交接已失效。' } },
+        400,
+      );
+    }
+    const tenant = context.get('tenant');
+    const repository = context.get('repository');
+    const handoff = await repository.getActiveBrowserHandoff(
+      tenant,
+      context.req.param('handoffId'),
+      identity.sessionBinding,
+    );
+    if (!handoff) {
+      return context.json(
+        { error: { code: 'handoff_invalid', message: '人工交接已完成或已失效。' } },
+        409,
+      );
+    }
+    const scope: HandoffScope = {
+      handoffId: handoff.id,
+      approvedUsername: handoff.exactTargetUsername,
+      approvedPlatformId: handoff.targetPlatformId,
+      absoluteDeadlineAt: handoff.expiresAt,
+    };
+    let outcome: 'confirmed' | 'unknown' | 'target_mismatch' = 'unknown';
+    try {
+      outcome = await provider.verify(
+        { browserSessionId: handoff.browserSessionId, targetId: handoff.targetId },
+        scope,
+      );
+    } catch {
+      outcome = 'unknown';
+    }
+    await provider.close(handoff.browserSessionId).catch(() => undefined);
+    const completed = await repository.completeBrowserHandoff(tenant, handoff.id, outcome);
+    const coordinator = await connectionCoordinator(
+      context.env,
+      tenant.tenantId,
+      handoff.connectionId,
+    );
+    await coordinator.stub.release(
+      coordinator.ownerDigest,
+      handoff.jobId,
+      handoff.leaseGeneration,
+    );
+    if (!completed) {
+      return context.json(
+        { error: { code: 'result_unknown', message: '結果狀態不一致，需要人工複查。' } },
+        409,
+      );
+    }
+    return context.json(
+      {
+        result: {
+          status: outcome === 'confirmed' ? 'confirmed_success' : 'unknown_needs_review',
+          exactTargetUsername: handoff.exactTargetUsername,
+        },
+      },
+      200,
+      { 'cache-control': 'private, no-store' },
+    );
+  });
+
   return routes;
 }

@@ -100,11 +100,14 @@ describe('browser handoff broker', () => {
     const liveViewUrl = vi.fn().mockResolvedValue(
       'https://live.browser.run/session-capability?token=short-lived-secret',
     );
+    const verify = vi.fn().mockResolvedValue('confirmed' as const);
+    const close = vi.fn().mockResolvedValue(undefined);
     const provider: BrowserHandoffProvider = {
       isAvailable: () => true,
       prepare,
       liveViewUrl,
-      close: vi.fn().mockResolvedValue(undefined),
+      verify,
+      close,
     };
     const app = createApp({
       identityVerifier: identityVerifier(),
@@ -156,6 +159,40 @@ describe('browser handoff broker', () => {
       env,
     );
     expect(replay.status).toBe(409);
+
+    const completed = await app.request(
+      `/api/handoffs/${encodeURIComponent(body.handoff.id)}/complete`,
+      { method: 'POST', headers: { origin: 'https://guard.example' } },
+      env,
+    );
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toEqual({
+      result: { status: 'confirmed_success', exactTargetUsername: 'target.account' },
+    });
+    expect(verify).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledWith('browser-session-secret');
+    const terminal = await env.DB.prepare(
+      `SELECT candidates.status AS candidate_status, approvals.status AS approval_status,
+              jobs.status AS job_status, browser_handoffs.status AS handoff_status
+       FROM browser_handoffs
+       JOIN approvals ON approvals.id = browser_handoffs.approval_id
+       JOIN candidates ON candidates.id = approvals.candidate_id
+       JOIN jobs ON jobs.id = browser_handoffs.job_id
+       WHERE browser_handoffs.id = ?`,
+    )
+      .bind(body.handoff.id)
+      .first<{
+        candidate_status: string;
+        approval_status: string;
+        job_status: string;
+        handoff_status: string;
+      }>();
+    expect(terminal).toEqual({
+      candidate_status: 'blocked',
+      approval_status: 'consumed',
+      job_status: 'succeeded',
+      handoff_status: 'completed',
+    });
   });
 
   it('does not consume an approval when production capability is unavailable', async () => {
@@ -175,5 +212,56 @@ describe('browser handoff broker', () => {
       .bind(approvalId)
       .first<{ status: string }>();
     expect(approval?.status).toBe('issued');
+  });
+
+  it('classifies unverifiable post-capability results as needs review without retrying', async () => {
+    const prepare = vi.fn().mockResolvedValue({ browserSessionId: 'session', targetId: 'target' });
+    const provider: BrowserHandoffProvider = {
+      isAvailable: () => true,
+      prepare,
+      liveViewUrl: vi.fn().mockResolvedValue('https://live.browser.run/capability'),
+      verify: vi.fn().mockRejectedValue(new Error('UI changed')),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const app = createApp({
+      identityVerifier: identityVerifier(),
+      browserHandoffProvider: provider,
+    });
+    const { approvalId } = await approvalFixture(app);
+    const created = await app.request(
+      '/api/handoffs',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ approvalId, actionToken: ACTION_TOKEN }),
+      },
+      env,
+    );
+    const body = await created.json<{ handoff: { id: string; enterPath: string } }>();
+    const cookie = (created.headers.get('set-cookie') ?? '').split(';')[0];
+    await app.request(
+      body.handoff.enterPath,
+      { method: 'POST', headers: { origin: 'https://guard.example', cookie } },
+      env,
+    );
+
+    const completed = await app.request(
+      `/api/handoffs/${encodeURIComponent(body.handoff.id)}/complete`,
+      { method: 'POST', headers: { origin: 'https://guard.example' } },
+      env,
+    );
+    await expect(completed.json()).resolves.toMatchObject({
+      result: { status: 'unknown_needs_review' },
+    });
+    const candidate = await env.DB.prepare(
+      `SELECT candidates.status FROM candidates
+       JOIN approvals ON approvals.candidate_id = candidates.id
+       JOIN browser_handoffs ON browser_handoffs.approval_id = approvals.id
+       WHERE browser_handoffs.id = ?`,
+    )
+      .bind(body.handoff.id)
+      .first<{ status: string }>();
+    expect(candidate?.status).toBe('needs_review');
+    expect(prepare).toHaveBeenCalledOnce();
   });
 });

@@ -24,6 +24,15 @@ export class FailClosedBrowserHandoffProvider implements BrowserHandoffProvider 
     return Promise.reject(new HandoffCapabilityError());
   }
 
+  verify(
+    prepared: PreparedBrowserHandoff,
+    scope: HandoffScope,
+  ): Promise<'confirmed' | 'unknown' | 'target_mismatch'> {
+    void prepared;
+    void scope;
+    return Promise.reject(new HandoffCapabilityError());
+  }
+
   close(browserSessionId: string): Promise<void> {
     void browserSessionId;
     return Promise.resolve();
