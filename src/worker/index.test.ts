@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { app } from './index';
+import { app, createApp } from './index';
+import type { IdentityVerifier } from './identity/types';
 
 describe('health endpoint', () => {
   it('reports that the service is available', async () => {
@@ -11,5 +12,49 @@ describe('health endpoint', () => {
       service: 'threads-variant-guard',
       status: 'ok',
     });
+  });
+});
+
+describe('application identity', () => {
+  it('rejects protected API requests without a configured identity provider', async () => {
+    const response = await app.request('/api/me');
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'authentication_required' },
+    });
+  });
+
+  it('returns only the verified application identity', async () => {
+    const verifier: IdentityVerifier = {
+      verify: () =>
+        Promise.resolve({
+          subject: 'identity-provider|immutable-user-id',
+          email: 'owner@example.com',
+          authenticatedAt: '2026-07-19T06:00:00.000Z',
+        }),
+    };
+    const protectedApp = createApp({ identityVerifier: verifier });
+
+    const response = await protectedApp.request('/api/me');
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      subject: 'identity-provider|immutable-user-id',
+      email: 'owner@example.com',
+      authenticatedAt: '2026-07-19T06:00:00.000Z',
+    });
+  });
+
+  it('keeps unknown API paths as JSON 404 responses', async () => {
+    const verifier: IdentityVerifier = {
+      verify: () => Promise.resolve({ subject: 'user-id' }),
+    };
+    const protectedApp = createApp({ identityVerifier: verifier });
+
+    const response = await protectedApp.request('/api/unknown');
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toContain('application/json');
   });
 });
