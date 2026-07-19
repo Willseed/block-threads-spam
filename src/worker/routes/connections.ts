@@ -6,6 +6,7 @@ import { assessProfileSimilarity } from '../../domain/similarity';
 import { parseUsername } from '../../domain/usernames';
 import {
   CandidateAlreadyExistsError,
+  CandidateDecisionConflictError,
   TenantAuthorizationError,
 } from '../../platform/d1/repository';
 import { R2EvidenceRepository } from '../../platform/r2/evidence-repository';
@@ -30,6 +31,10 @@ const generationInput = z.object({
 
 const revocationInput = z.object({
   dataRetention: z.enum(['retain', 'delete']),
+});
+
+const decisionInput = z.object({
+  action: z.enum(['watch', 'ignore', 'resume']),
 });
 
 function validationError() {
@@ -185,6 +190,36 @@ connectionRoutes.post('/:connectionId/candidates', async (context) => {
       return context.json(
         { error: { code: 'not_found', message: '找不到指定的 Threads 連線。' } },
         404,
+      );
+    }
+    throw error;
+  }
+});
+
+connectionRoutes.patch('/:connectionId/candidates/:candidateId', async (context) => {
+  const body: unknown = await context.req.json().catch(() => undefined);
+  const parsed = decisionInput.safeParse(body);
+  if (!parsed.success) return context.json(validationError(), 400);
+  const event = parsed.data.action === 'ignore' ? 'ignore' : 'mark_watching';
+  try {
+    const candidate = await context.get('repository').decideCandidate(
+      context.get('tenant'),
+      context.req.param('connectionId'),
+      context.req.param('candidateId'),
+      event,
+    );
+    return context.json({ candidate });
+  } catch (error) {
+    if (error instanceof TenantAuthorizationError) {
+      return context.json(
+        { error: { code: 'not_found', message: '找不到指定的候選帳號。' } },
+        404,
+      );
+    }
+    if (error instanceof CandidateDecisionConflictError) {
+      return context.json(
+        { error: { code: 'invalid_candidate_state', message: '目前狀態不能執行這個決定。' } },
+        409,
       );
     }
     throw error;

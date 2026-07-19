@@ -1,5 +1,7 @@
 import type { AppIdentity } from '../../worker/identity/types';
 import type { SimilarityAssessment } from '../../domain/similarity';
+import { InvalidStateTransitionError, transitionCandidate } from '../../domain/state-machines';
+import type { CandidateEvent } from '../../domain/state-machines';
 import type { ProfileLookupFailure, ThreadsPublicProfile } from '../../adapters/threads-profile/types';
 
 export interface TenantContext {
@@ -131,6 +133,12 @@ export interface ApplicationRepository {
     candidateId: string,
     update: CandidateLookupUpdate,
   ): Promise<CandidateRecord>;
+  decideCandidate(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+    event: Extract<CandidateEvent, 'mark_watching' | 'ignore'>,
+  ): Promise<CandidateRecord>;
   addGeneratedCandidates(
     tenant: TenantContext,
     connectionId: string,
@@ -188,6 +196,13 @@ export class CandidateAlreadyExistsError extends Error {
   constructor() {
     super('Candidate already exists');
     this.name = 'CandidateAlreadyExistsError';
+  }
+}
+
+export class CandidateDecisionConflictError extends Error {
+  constructor() {
+    super('Candidate state changed before the decision was saved');
+    this.name = 'CandidateDecisionConflictError';
   }
 }
 
@@ -886,6 +901,71 @@ export class D1Repository implements ApplicationRepository {
     const candidate = await this.getCandidate(tenant, connectionId, candidateId);
     if (!candidate) throw new TenantAuthorizationError();
     return candidate;
+  }
+
+  async decideCandidate(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+    event: Extract<CandidateEvent, 'mark_watching' | 'ignore'>,
+  ): Promise<CandidateRecord> {
+    const candidate = await this.getCandidate(tenant, connectionId, candidateId);
+    if (!candidate) throw new TenantAuthorizationError();
+    let nextStatus: CandidateRecord['status'];
+    try {
+      nextStatus = transitionCandidate(candidate.status, event);
+    } catch (error) {
+      if (error instanceof InvalidStateTransitionError) {
+        throw new CandidateDecisionConflictError();
+      }
+      throw error;
+    }
+    const now = this.#now().toISOString();
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `UPDATE candidates SET status = ?
+           WHERE id = ? AND tenant_id = ? AND connection_id = ? AND status = ?
+             AND EXISTS (
+               SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+             )`,
+        )
+        .bind(
+          nextStatus,
+          candidateId,
+          tenant.tenantId,
+          connectionId,
+          candidate.status,
+          tenant.tenantId,
+          tenant.userId,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, 'candidate.decision', username, ?, ?
+           FROM candidates WHERE id = ? AND tenant_id = ? AND connection_id = ? AND status = ?`,
+        )
+        .bind(
+          `aud_${this.#idFactory()}`,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          JSON.stringify({ event, previousStatus: candidate.status, nextStatus }),
+          now,
+          candidateId,
+          tenant.tenantId,
+          connectionId,
+          nextStatus,
+        ),
+    ]);
+    if (results[0].meta.changes !== 1 || results[1].meta.changes !== 1) {
+      throw new CandidateDecisionConflictError();
+    }
+    const updated = await this.getCandidate(tenant, connectionId, candidateId);
+    if (!updated) throw new TenantAuthorizationError();
+    return updated;
   }
 
   async addGeneratedCandidates(

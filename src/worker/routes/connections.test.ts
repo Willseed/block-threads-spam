@@ -341,4 +341,73 @@ describe('connection and manual candidate API', () => {
       .first<{ count: number }>();
     expect(remaining?.count).toBe(0);
   });
+
+  it('applies one audited candidate decision through valid state transitions', async () => {
+    const connection = await createConnection();
+    const app = applicationFor('idp|owner');
+    const createResponse = await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'will.seed' }),
+      },
+      env,
+    );
+    const candidate = (await createResponse.json<{ candidate: { id: string } }>()).candidate;
+    await env.DB.prepare("UPDATE candidates SET status = 'pending_review' WHERE id = ?")
+      .bind(candidate.id)
+      .run();
+
+    for (const [action, status] of [
+      ['watch', 'watching'],
+      ['ignore', 'ignored'],
+      ['resume', 'watching'],
+    ] as const) {
+      const response = await app.request(
+        `/api/connections/${connection.id}/candidates/${candidate.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ action }),
+        },
+        env,
+      );
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ candidate: { status } });
+    }
+    const audits = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'candidate.decision'",
+    ).first<{ count: number }>();
+    expect(audits?.count).toBe(3);
+  });
+
+  it('rejects a candidate decision that is not valid in the current state', async () => {
+    const connection = await createConnection();
+    const app = applicationFor('idp|owner');
+    const createResponse = await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'will.seed' }),
+      },
+      env,
+    );
+    const candidate = (await createResponse.json<{ candidate: { id: string } }>()).candidate;
+
+    const response = await app.request(
+      `/api/connections/${connection.id}/candidates/${candidate.id}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'ignore' }),
+      },
+      env,
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'invalid_candidate_state' },
+    });
+  });
 });

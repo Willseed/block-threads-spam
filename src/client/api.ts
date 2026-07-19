@@ -81,4 +81,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ totalLimit: 80, perRuleLimit: 12 }),
     }),
+  decideCandidate: (
+    connectionId: string,
+    candidateId: string,
+    action: 'watch' | 'ignore' | 'resume',
+  ) =>
+    request<{ candidate: Candidate }>(
+      `/api/connections/${connectionId}/candidates/${candidateId}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ action }),
+      },
+    ),
 };

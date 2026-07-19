@@ -209,6 +209,27 @@ function CandidateList({
     }
   }
 
+  async function decide(candidateId: string, action: 'watch' | 'ignore' | 'resume') {
+    if (!connection) return;
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await api.decideCandidate(connection.id, candidateId, action);
+      setMessage(
+        action === 'ignore'
+          ? '已忽略這個候選。'
+          : action === 'resume'
+            ? '已恢復監看這個候選。'
+            : '已將這個候選加入監看。',
+      );
+      await onRefresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '無法儲存候選決定。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader eyebrow="Review queue" title="候選帳號">
@@ -258,7 +279,45 @@ function CandidateList({
                     <p>{candidate.reasons[0] ?? '使用者人工加入'}</p>
                     <small>{candidate.sourceType === 'manual' ? '人工目標' : candidate.sourceRules.join('、')} · {formatDate(candidate.firstSeenAt)}</small>
                   </div>
-                  <button className="button ghost" type="button" disabled>等待掃描</button>
+                  <div className="candidate-actions">
+                    {candidate.status === 'ignored' ? (
+                      <button
+                        className="button ghost"
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void decide(candidate.id, 'resume')}
+                      >
+                        恢復監看
+                      </button>
+                    ) : ['pending_review', 'watching', 'not_found', 'lookup_unavailable'].includes(
+                        candidate.status,
+                      ) ? (
+                      <>
+                        {candidate.status !== 'watching' ? (
+                          <button
+                            className="button ghost"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void decide(candidate.id, 'watch')}
+                          >
+                            持續監看
+                          </button>
+                        ) : null}
+                        {['pending_review', 'watching'].includes(candidate.status) ? (
+                          <button
+                            className="button ghost"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void decide(candidate.id, 'ignore')}
+                          >
+                            忽略
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <button className="button ghost" type="button" disabled>等待掃描</button>
+                    )}
+                  </div>
                 </article>
               ))}
             </section>

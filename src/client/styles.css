@@ -88,6 +88,7 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
 .candidate-main h2 { margin: 0; font-size: 1rem; }
 .candidate-main p { margin: .4rem 0; color: #55615a; font-size: .8rem; }
 .candidate-main small { color: #8a928d; font-size: .68rem; }
+.candidate-actions { display: flex; align-items: center; gap: .35rem; }
 .priority { padding: .2rem .42rem; border-radius: 999px; font-size: .6rem; font-weight: 700; }
 .priority.low { color: #5e6b64; background: #e6e9e5; }
 .priority.medium { color: #8a641e; background: #f2e8c9; }
@@ -154,5 +155,5 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
   .inline-form { align-items: stretch; flex-direction: column; }
   .inline-form > div { min-width: 100%; }
   .candidate-card { grid-template-columns: auto 1fr; }
-  .candidate-card > .button { display: none; }
+  .candidate-actions { grid-column: 2; justify-content: flex-start; }
 }
