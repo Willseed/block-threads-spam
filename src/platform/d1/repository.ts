@@ -80,6 +80,14 @@ export interface AuditEventRecord {
   createdAt: string;
 }
 
+export interface SchedulePreferenceRecord {
+  enabled: boolean;
+  timezone: string;
+  frequencyPolicy: 'daily_low_frequency';
+  nextRunAt?: string;
+  lastRunAt?: string;
+}
+
 export interface ConsumedApproval {
   id: string;
   connectionId: string;
@@ -207,6 +215,16 @@ export interface ApplicationRepository {
     tenant: TenantContext,
     options?: { connectionId?: string; limit?: number },
   ): Promise<AuditEventRecord[]>;
+  getSchedulePreference(
+    tenant: TenantContext,
+    connectionId: string,
+  ): Promise<SchedulePreferenceRecord | undefined>;
+  updateSchedulePreference(
+    tenant: TenantContext,
+    connectionId: string,
+    enabled: boolean,
+    timezone: string,
+  ): Promise<SchedulePreferenceRecord>;
   consumeApproval(
     tenant: TenantContext,
     approvalId: string,
@@ -303,6 +321,14 @@ interface BrowserHandoffRow {
   target_platform_id: string;
   expires_at: string;
   lease_generation: number;
+}
+
+interface SchedulePreferenceRow {
+  enabled: number;
+  timezone: string;
+  frequency_policy: 'daily_low_frequency';
+  next_run_at: string | null;
+  last_run_at: string | null;
 }
 
 interface CandidateRow {
@@ -1285,6 +1311,112 @@ export class D1Repository implements ApplicationRepository {
       ...(row.target_ref ? { targetRef: row.target_ref } : {}),
       createdAt: row.created_at,
     }));
+  }
+
+  async getSchedulePreference(
+    tenant: TenantContext,
+    connectionId: string,
+  ): Promise<SchedulePreferenceRecord | undefined> {
+    if (!(await this.getConnection(tenant, connectionId))) return undefined;
+    const row = await this.#db
+      .prepare(
+        `SELECT enabled, timezone, frequency_policy, next_run_at, last_run_at
+         FROM schedule_preferences
+         WHERE connection_id = ?
+           AND EXISTS (
+             SELECT 1 FROM threads_connections
+             WHERE id = ? AND tenant_id = ?
+           ) AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )`,
+      )
+      .bind(connectionId, connectionId, tenant.tenantId, tenant.tenantId, tenant.userId)
+      .first<SchedulePreferenceRow>();
+    if (!row) {
+      return { enabled: false, timezone: 'UTC', frequencyPolicy: 'daily_low_frequency' };
+    }
+    return {
+      enabled: row.enabled === 1,
+      timezone: row.timezone,
+      frequencyPolicy: row.frequency_policy,
+      ...(row.next_run_at ? { nextRunAt: row.next_run_at } : {}),
+      ...(row.last_run_at ? { lastRunAt: row.last_run_at } : {}),
+    };
+  }
+
+  async updateSchedulePreference(
+    tenant: TenantContext,
+    connectionId: string,
+    enabled: boolean,
+    timezone: string,
+  ): Promise<SchedulePreferenceRecord> {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format();
+    } catch {
+      throw new TypeError('Invalid IANA timezone');
+    }
+    const now = this.#now();
+    const nextRunAt = enabled
+      ? new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString()
+      : null;
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `INSERT INTO schedule_preferences
+             (connection_id, enabled, timezone, frequency_policy, next_run_at)
+           SELECT ?, ?, ?, 'daily_low_frequency', ?
+           WHERE EXISTS (
+             SELECT 1 FROM threads_connections
+             WHERE id = ? AND tenant_id = ? AND status = CASE WHEN ? = 1 THEN 'connected' ELSE status END
+           ) AND EXISTS (
+             SELECT 1 FROM memberships WHERE tenant_id = ? AND user_id = ?
+           )
+           ON CONFLICT(connection_id) DO UPDATE SET
+             enabled = excluded.enabled,
+             timezone = excluded.timezone,
+             frequency_policy = excluded.frequency_policy,
+             next_run_at = excluded.next_run_at,
+             lease_until = NULL`,
+        )
+        .bind(
+          connectionId,
+          enabled ? 1 : 0,
+          timezone,
+          nextRunAt,
+          connectionId,
+          tenant.tenantId,
+          enabled ? 1 : 0,
+          tenant.tenantId,
+          tenant.userId,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, 'schedule.updated', protected_username, ?, ?
+           FROM threads_connections
+           WHERE id = ? AND tenant_id = ?
+             AND EXISTS (SELECT 1 FROM schedule_preferences WHERE connection_id = ?)`,
+        )
+        .bind(
+          `aud_${this.#idFactory()}`,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          JSON.stringify({ enabled, timezone, frequencyPolicy: 'daily_low_frequency' }),
+          now.toISOString(),
+          connectionId,
+          tenant.tenantId,
+          connectionId,
+        ),
+    ]);
+    if (results[0].meta.changes !== 1 || results[1].meta.changes !== 1) {
+      throw new TenantAuthorizationError();
+    }
+    const preference = await this.getSchedulePreference(tenant, connectionId);
+    if (!preference) throw new TenantAuthorizationError();
+    return preference;
   }
 
   async consumeApproval(

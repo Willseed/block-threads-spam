@@ -40,6 +40,14 @@ export interface ActivityEvent {
   createdAt: string;
 }
 
+export interface SchedulePreference {
+  enabled: boolean;
+  timezone: string;
+  frequencyPolicy: 'daily_low_frequency';
+  nextRunAt?: string;
+  lastRunAt?: string;
+}
+
 interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
@@ -119,5 +127,12 @@ export const api = {
     request<{ connection: Connection }>(`/api/connections/${connectionId}/oauth/confirm`, {
       method: 'POST',
       body: JSON.stringify({ username }),
+    }),
+  schedule: (connectionId: string) =>
+    request<{ schedule: SchedulePreference }>(`/api/connections/${connectionId}/schedule`),
+  updateSchedule: (connectionId: string, enabled: boolean, timezone: string) =>
+    request<{ schedule: SchedulePreference }>(`/api/connections/${connectionId}/schedule`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled, timezone }),
     }),
 };

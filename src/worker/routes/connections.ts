@@ -42,6 +42,11 @@ const approvalInput = z.object({
   exactTargetUsername: z.string().min(1).max(31),
 });
 
+const scheduleInput = z.object({
+  enabled: z.boolean(),
+  timezone: z.string().min(1).max(64),
+});
+
 const APPROVAL_TTL_MILLISECONDS = 5 * 60 * 1000;
 const MAX_EVIDENCE_AGE_MILLISECONDS = 15 * 60 * 1000;
 
@@ -165,6 +170,51 @@ connectionRoutes.delete('/:connectionId', requireRecentAuthentication, async (co
       },
       503,
     );
+  }
+});
+
+connectionRoutes.get('/:connectionId/schedule', async (context) => {
+  const preference = await context.get('repository').getSchedulePreference(
+    context.get('tenant'),
+    context.req.param('connectionId'),
+  );
+  if (!preference) {
+    return context.json(
+      { error: { code: 'not_found', message: '找不到指定的 Threads 連線。' } },
+      404,
+    );
+  }
+  return context.json({ schedule: preference });
+});
+
+connectionRoutes.patch('/:connectionId/schedule', async (context) => {
+  const body: unknown = await context.req.json().catch(() => undefined);
+  const parsed = scheduleInput.safeParse(body);
+  if (!parsed.success) return context.json(validationError(), 400);
+  try {
+    const schedule = await context.get('repository').updateSchedulePreference(
+      context.get('tenant'),
+      context.req.param('connectionId'),
+      parsed.data.enabled,
+      parsed.data.timezone,
+    );
+    return context.json({ schedule });
+  } catch (error) {
+    if (error instanceof TypeError) return context.json(validationError(), 400);
+    if (error instanceof TenantAuthorizationError) {
+      return context.json(
+        {
+          error: {
+            code: 'schedule_precondition_failed',
+            message: parsed.data.enabled
+              ? '只有已確認的 Threads 連線能啟用排程。'
+              : '找不到指定的 Threads 連線。',
+          },
+        },
+        parsed.data.enabled ? 409 : 404,
+      );
+    }
+    throw error;
   }
 });
 

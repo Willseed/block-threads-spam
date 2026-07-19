@@ -122,6 +122,8 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(191 89 59 /
 .settings-grid article { min-height: 14rem; padding: 1.5rem; }
 .settings-grid h2 { margin: 3rem 0 .75rem; font-size: 1.15rem; }
 .settings-grid p { color: var(--muted); font-size: .82rem; line-height: 1.7; }
+.schedule-card .button { margin-top: .75rem; }
+.schedule-card .notice { display: block; margin-top: .65rem; }
 .loading-screen, .error-screen { display: grid; min-height: 100vh; place-content: center; justify-items: center; padding: 2rem; text-align: center; background: #edece4; }
 .loading-screen span { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: .85rem; color: white; background: var(--ink); font-weight: 700; animation: pulse 1.5s ease infinite; }
 .loading-screen p, .error-screen > p:not(.eyebrow) { color: var(--muted); }

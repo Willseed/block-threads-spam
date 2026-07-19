@@ -475,4 +475,60 @@ describe('connection and manual candidate API', () => {
     );
     expect(repeated.status).toBe(409);
   });
+
+  it('keeps low-frequency schedules off until an owned connection is confirmed', async () => {
+    const connection = await createConnection();
+    const app = applicationFor('idp|owner');
+    const initial = await app.request(
+      `/api/connections/${connection.id}/schedule`,
+      undefined,
+      env,
+    );
+    await expect(initial.json()).resolves.toEqual({
+      schedule: { enabled: false, timezone: 'UTC', frequencyPolicy: 'daily_low_frequency' },
+    });
+
+    const enableRequest = {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true, timezone: 'Asia/Taipei' }),
+    };
+    const unconfirmed = await app.request(
+      `/api/connections/${connection.id}/schedule`,
+      enableRequest,
+      env,
+    );
+    expect(unconfirmed.status).toBe(409);
+
+    await env.DB.prepare("UPDATE threads_connections SET status = 'connected' WHERE id = ?")
+      .bind(connection.id)
+      .run();
+    const enabled = await app.request(
+      `/api/connections/${connection.id}/schedule`,
+      enableRequest,
+      env,
+    );
+    expect(enabled.status).toBe(200);
+    await expect(enabled.json()).resolves.toMatchObject({
+      schedule: {
+        enabled: true,
+        timezone: 'Asia/Taipei',
+        frequencyPolicy: 'daily_low_frequency',
+      },
+    });
+  });
+
+  it('rejects invalid schedule timezones', async () => {
+    const connection = await createConnection();
+    const response = await applicationFor('idp|owner').request(
+      `/api/connections/${connection.id}/schedule`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: false, timezone: 'Not/A_Timezone' }),
+      },
+      env,
+    );
+    expect(response.status).toBe(400);
+  });
 });
