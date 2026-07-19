@@ -60,3 +60,4 @@ export function createApp(dependencies: AppDependencies = {}) {
 export const app = createApp();
 
 export default app;
+export { ConnectionCoordinator } from '../durable-objects/connection-coordinator';
