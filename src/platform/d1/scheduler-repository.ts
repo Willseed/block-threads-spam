@@ -118,14 +118,19 @@ export class SchedulerRepository {
   }
 
   async deferCandidate(candidateId: string, lookup: ProfileLookupResult): Promise<void> {
-    const delay =
-      lookup.status === 'not_found'
-        ? 7 * 24 * 60 * 60 * 1000
-        : lookup.status === 'unavailable'
-          ? lookup.reason === 'rate_limited'
-            ? 24 * 60 * 60 * 1000
-            : 6 * 60 * 60 * 1000
-          : 24 * 60 * 60 * 1000;
+    let delay: number;
+    switch (lookup.status) {
+      case 'not_found':
+        delay = 7 * 24 * 60 * 60 * 1000;
+        break;
+      case 'unavailable':
+        delay = lookup.reason === 'rate_limited'
+          ? 24 * 60 * 60 * 1000
+          : 6 * 60 * 60 * 1000;
+        break;
+      default:
+        delay = 24 * 60 * 60 * 1000;
+    }
     await this.#db
       .prepare('UPDATE candidates SET next_check_at = ? WHERE id = ?')
       .bind(new Date(this.#now().getTime() + delay).toISOString(), candidateId)

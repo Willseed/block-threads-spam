@@ -20,7 +20,7 @@ export interface EncryptedThreadsCredential {
 function encode(bytes: ArrayBuffer | Uint8Array): string {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = '';
-  for (const byte of view) binary += String.fromCharCode(byte);
+  for (const byte of view) binary += String.fromCodePoint(byte);
   return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
 }
 
@@ -28,7 +28,7 @@ function decode(value: string): Uint8Array<ArrayBuffer> {
   if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new TypeError('Invalid base64url value');
   const padded = value.replaceAll('-', '+').replaceAll('_', '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
   const binary = atob(padded);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
 }
 
 async function importAesKey(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {

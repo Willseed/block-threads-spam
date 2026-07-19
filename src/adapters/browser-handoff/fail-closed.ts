@@ -1,7 +1,8 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import { HandoffCapabilityError } from './types';
 import type {
-  BrowserHandoffProvider,
   HandoffScope,
+  BrowserHandoffProvider,
   PreparedBrowserHandoff,
 } from './types';
 
@@ -10,31 +11,25 @@ export class FailClosedBrowserHandoffProvider implements BrowserHandoffProvider 
     return false;
   }
 
-  prepare(scope: HandoffScope): Promise<PreparedBrowserHandoff> {
-    void scope;
+  prepare(_scope: HandoffScope): Promise<PreparedBrowserHandoff> {
     return Promise.reject(new HandoffCapabilityError());
   }
 
   liveViewUrl(
-    prepared: PreparedBrowserHandoff,
-    scope: HandoffScope,
+    _prepared: PreparedBrowserHandoff,
+    _scope: HandoffScope,
   ): Promise<string> {
-    void prepared;
-    void scope;
     return Promise.reject(new HandoffCapabilityError());
   }
 
   verify(
-    prepared: PreparedBrowserHandoff,
-    scope: HandoffScope,
+    _prepared: PreparedBrowserHandoff,
+    _scope: HandoffScope,
   ): Promise<'confirmed' | 'unknown' | 'target_mismatch'> {
-    void prepared;
-    void scope;
     return Promise.reject(new HandoffCapabilityError());
   }
 
-  close(browserSessionId: string): Promise<void> {
-    void browserSessionId;
+  close(_browserSessionId: string): Promise<void> {
     return Promise.resolve();
   }
 }

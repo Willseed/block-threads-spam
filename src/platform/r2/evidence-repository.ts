@@ -78,8 +78,8 @@ export class EvidenceStorageError extends Error {
   }
 }
 
-function asBytes(value: ArrayBuffer | Uint8Array): Uint8Array<ArrayBuffer> {
-  return value instanceof Uint8Array ? new Uint8Array(value) : new Uint8Array(value);
+function asBytes(value: ArrayBuffer | Uint8Array): ArrayBuffer {
+  return new Uint8Array(value).buffer;
 }
 
 function toHex(value: ArrayBuffer): string {

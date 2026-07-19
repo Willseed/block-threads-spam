@@ -70,7 +70,21 @@ export class ApiError extends Error {
   }
 }
 
+function encodePathSegment(segment: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(segment)) {
+    throw new Error('Invalid path segment');
+  }
+  return encodeURIComponent(segment);
+}
+
+function apiPath(...segments: string[]): string {
+  return `/api/${segments.map(encodePathSegment).join('/')}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!path.startsWith('/api/')) {
+    throw new Error('Invalid API request path');
+  }
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -88,14 +102,14 @@ export const api = {
   capabilities: () => request<{ capabilities: Capabilities }>('/api/capabilities'),
   connections: () => request<{ connections: Connection[] }>('/api/connections'),
   createConnection: (protectedUsername: string) =>
-    request<{ connection: Connection }>('/api/connections', {
+    request<{ connection: Connection }>(apiPath('connections'), {
       method: 'POST',
       body: JSON.stringify({ protectedUsername, connectionMode: 'meta_oauth' }),
     }),
   candidates: (connectionId: string) =>
-    request<{ candidates: Candidate[] }>(`/api/connections/${connectionId}/candidates`),
+    request<{ candidates: Candidate[] }>(apiPath('connections', connectionId, 'candidates')),
   addCandidate: (connectionId: string, username: string) =>
-    request<{ candidate: Candidate }>(`/api/connections/${connectionId}/candidates`, {
+    request<{ candidate: Candidate }>(apiPath('connections', connectionId, 'candidates'), {
       method: 'POST',
       body: JSON.stringify({ username }),
     }),
@@ -103,13 +117,13 @@ export const api = {
     request<{
       snapshot: { generated: number; created: number };
       candidates: Candidate[];
-    }>(`/api/connections/${connectionId}/candidates/generate`, {
+    }>(apiPath('connections', connectionId, 'candidates', 'generate'), {
       method: 'POST',
       body: JSON.stringify({ totalLimit: 80, perRuleLimit: 12 }),
     }),
   refreshCandidate: (connectionId: string, candidateId: string) =>
     request<{ candidate: Candidate }>(
-      `/api/connections/${connectionId}/candidates/${candidateId}/refresh`,
+      apiPath('connections', connectionId, 'candidates', candidateId, 'refresh'),
       { method: 'POST' },
     ),
   decideCandidate: (
@@ -118,27 +132,26 @@ export const api = {
     action: 'watch' | 'ignore' | 'resume',
   ) =>
     request<{ candidate: Candidate }>(
-      `/api/connections/${connectionId}/candidates/${candidateId}`,
+      apiPath('connections', connectionId, 'candidates', candidateId),
       {
         method: 'PATCH',
         body: JSON.stringify({ action }),
       },
     ),
-  activity: () => request<{ events: ActivityEvent[] }>('/api/activity?limit=50'),
+  activity: () => request<{ events: ActivityEvent[] }>(`${apiPath('activity')}?limit=50`),
   startOAuth: (connectionId: string) =>
     request<{ authorizationUrl: string; expiresAt: string }>(
-      `/api/connections/${connectionId}/oauth/start`,
+      apiPath('connections', connectionId, 'oauth', 'start'),
       { method: 'POST' },
     ),
   confirmOAuth: (connectionId: string, username: string) =>
-    request<{ connection: Connection }>(`/api/connections/${connectionId}/oauth/confirm`, {
+    request<{ connection: Connection }>(apiPath('connections', connectionId, 'oauth', 'confirm'), {
       method: 'POST',
       body: JSON.stringify({ username }),
     }),
-  schedule: (connectionId: string) =>
-    request<{ schedule: SchedulePreference }>(`/api/connections/${connectionId}/schedule`),
+  schedule: (connectionId: string) => request<{ schedule: SchedulePreference }>(apiPath('connections', connectionId, 'schedule')),
   updateSchedule: (connectionId: string, enabled: boolean, timezone: string) =>
-    request<{ schedule: SchedulePreference }>(`/api/connections/${connectionId}/schedule`, {
+    request<{ schedule: SchedulePreference }>(apiPath('connections', connectionId, 'schedule'), {
       method: 'PATCH',
       body: JSON.stringify({ enabled, timezone }),
     }),
@@ -146,7 +159,7 @@ export const api = {
     request<{
       approval: { id: string; expiresAt: string };
       actionToken: string;
-    }>(`/api/connections/${connectionId}/candidates/${candidateId}/approvals`, {
+    }>(apiPath('connections', connectionId, 'candidates', candidateId, 'approvals'), {
       method: 'POST',
       body: JSON.stringify({ exactTargetUsername }),
     }),
@@ -163,9 +176,9 @@ export const api = {
         status: 'confirmed_success' | 'unknown_needs_review';
         exactTargetUsername: string;
       };
-    }>(`/api/handoffs/${encodeURIComponent(handoffId)}/complete`, { method: 'POST' }),
+    }>(apiPath('handoffs', handoffId, 'complete'), { method: 'POST' }),
   revokeConnection: (connectionId: string, dataRetention: 'retain' | 'delete') =>
-    request<{ connection: Connection }>(`/api/connections/${connectionId}`, {
+    request<{ connection: Connection }>(apiPath('connections', connectionId), {
       method: 'DELETE',
       body: JSON.stringify({ dataRetention }),
     }),

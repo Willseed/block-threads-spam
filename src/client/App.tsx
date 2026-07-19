@@ -19,6 +19,50 @@ import type {
   SchedulePreference,
 } from './api';
 
+type ReadonlyPageHeaderProps = Readonly<{
+  eyebrow: string;
+  title: string;
+  children?: ReactNode;
+}>;
+
+type ReadonlyEmptyStateProps = Readonly<{
+  title: string;
+  body: string;
+  action?: ReactNode;
+}>;
+
+type ReadonlyLayoutProps = Readonly<{
+  identity: Identity;
+  connection?: Connection;
+  children: ReactNode;
+}>;
+
+type ReadonlyDashboardProps = Readonly<{
+  connections: Connection[];
+  candidates: Candidate[];
+}>;
+
+type ReadonlyCandidateListProps = Readonly<{
+  connection?: Connection;
+  candidates: Candidate[];
+  canManualHandoff: boolean;
+  onRefresh: () => Promise<void>;
+}>;
+
+type ReadonlyConnectionsProps = Readonly<{
+  connections: Connection[];
+  onCreated: () => Promise<void>;
+}>;
+
+type ReadonlyActivityProps = Readonly<{
+  events: ActivityEvent[];
+}>;
+
+type ReadonlySettingsProps = Readonly<{
+  connection?: Connection;
+  onConnectionChanged: () => Promise<void>;
+}>;
+
 const STATUS_LABELS: Record<Connection['status'], string> = {
   awaiting_identity_confirmation: '等待確認',
   connected: '已連線',
@@ -36,6 +80,34 @@ const NAVIGATION = [
   { to: '/settings', label: '設定', glyph: '◇' },
 ] as const;
 
+const PRIORITY_LABELS: Record<Candidate['priority'], string> = {
+  high: '高',
+  medium: '中',
+  low: '低',
+};
+
+const OAUTH_AUTHORIZATION_HOSTS = new Set(['threads.com', 'www.threads.com']);
+
+function oauthAuthorizationMessage(result: string): string {
+  return result === 'pending_confirmation'
+    ? 'Threads 已授權；請核對下方官方帳號後完成確認。'
+    : result === 'cancelled'
+      ? '你已取消 Threads 授權，沒有保存新憑證。'
+      : 'Threads 授權未完成，請重新開始。';
+}
+
+function sanitizeAuthorizationUrl(raw: string): string {
+  const authorizationUrl = new URL(raw);
+  if (
+    authorizationUrl.protocol !== 'https:' ||
+    authorizationUrl.pathname !== '/oauth/authorize' ||
+    !OAUTH_AUTHORIZATION_HOSTS.has(authorizationUrl.hostname)
+  ) {
+    throw new Error('Invalid OAuth authorization URL');
+  }
+  return authorizationUrl.toString();
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('zh-TW', {
     dateStyle: 'medium',
@@ -43,7 +115,11 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function PageHeader({ eyebrow, title, children }: { eyebrow: string; title: string; children?: ReactNode }) {
+function fireAndForget(task: Promise<unknown>): void {
+  task.catch(() => {});
+}
+
+function PageHeader({ eyebrow, title, children }: ReadonlyPageHeaderProps) {
   return (
     <header className="page-header">
       <div>
@@ -55,7 +131,7 @@ function PageHeader({ eyebrow, title, children }: { eyebrow: string; title: stri
   );
 }
 
-function EmptyState({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
+function EmptyState({ title, body, action }: ReadonlyEmptyStateProps) {
   return (
     <section className="empty-state">
       <span className="empty-mark">◎</span>
@@ -70,11 +146,7 @@ function Layout({
   identity,
   connection,
   children,
-}: {
-  identity: Identity;
-  connection?: Connection;
-  children: ReactNode;
-}) {
+}: ReadonlyLayoutProps) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -117,7 +189,7 @@ function Layout({
   );
 }
 
-function Dashboard({ connections, candidates }: { connections: Connection[]; candidates: Candidate[] }) {
+function Dashboard({ connections, candidates }: ReadonlyDashboardProps) {
   const highPriority = candidates.filter(({ priority }) => priority === 'high').length;
   const watching = candidates.filter(({ status }) => status === 'watching').length;
 
@@ -176,12 +248,7 @@ function CandidateList({
   candidates,
   canManualHandoff,
   onRefresh,
-}: {
-  connection?: Connection;
-  candidates: Candidate[];
-  canManualHandoff: boolean;
-  onRefresh: () => Promise<void>;
-}) {
+}: ReadonlyCandidateListProps) {
   const [username, setUsername] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
@@ -324,7 +391,7 @@ function CandidateList({
     <>
       <PageHeader eyebrow="Review queue" title="候選帳號">
         {connection ? (
-          <button className="button primary" disabled={busy} onClick={() => void generate()}>
+          <button className="button primary" type="button" disabled={busy} onClick={() => fireAndForget(generate())}>
             {busy ? '處理中…' : '產生有限候選'}
           </button>
         ) : undefined}
@@ -337,7 +404,7 @@ function CandidateList({
         />
       ) : (
         <>
-          <form className="inline-form panel" onSubmit={(event) => void addManual(event)}>
+          <form className="inline-form panel" onSubmit={(event) => fireAndForget(addManual(event))}>
             <label htmlFor="manual-candidate">
               人工加入已知帳號
               <small>只接受一個完整 username，不支援搜尋或萬用字元。</small>
@@ -354,7 +421,7 @@ function CandidateList({
             </div>
           </form>
           {pendingHandoff ? (
-            <section className="panel handoff-return" role="status">
+            <section className="panel handoff-return">
               <div>
                 <strong>人工操作：@{pendingHandoff.exactTargetUsername}</strong>
                 <small>完成 Live View 後回到這裡，只會驗證結果，不會再次執行。</small>
@@ -363,13 +430,13 @@ function CandidateList({
                 className="button primary"
                 type="button"
                 disabled={busy}
-                onClick={() => void completeHandoff()}
+                onClick={() => fireAndForget(completeHandoff())}
               >
                 已完成，驗證結果
               </button>
             </section>
           ) : null}
-          {message ? <p className="notice" role="status">{message}</p> : null}
+          {message ? <output className="notice">{message}</output> : null}
           {candidates.length === 0 ? (
             <EmptyState title="目前沒有候選" body="你可以產生受限變形，或人工加入一個已知完整帳號。" />
           ) : (
@@ -380,10 +447,13 @@ function CandidateList({
                   <div className="candidate-main">
                     <div>
                       <h2>@{candidate.username}</h2>
-                      <span className={`priority ${candidate.priority}`}>{candidate.priority === 'high' ? '高' : candidate.priority === 'medium' ? '中' : '低'}優先</span>
+                      <span className={`priority ${candidate.priority}`}>{PRIORITY_LABELS[candidate.priority]}優先</span>
                     </div>
                     <p>{candidate.reasons[0] ?? '使用者人工加入'}</p>
-                    <small>{candidate.sourceType === 'manual' ? '人工目標' : candidate.sourceRules.join('、')} · {formatDate(candidate.firstSeenAt)}</small>
+                    <small>
+                      {candidate.sourceType === 'manual' ? '人工目標' : candidate.sourceRules.join('、')} ·{' '}
+                      {formatDate(candidate.firstSeenAt)}
+                    </small>
                   </div>
                   <div className="candidate-actions">
                     {candidate.status === 'ignored' ? (
@@ -391,7 +461,7 @@ function CandidateList({
                         className="button ghost"
                         type="button"
                         disabled={busy}
-                        onClick={() => void decide(candidate.id, 'resume')}
+                        onClick={() => fireAndForget(decide(candidate.id, 'resume'))}
                       >
                         恢復監看
                       </button>
@@ -400,7 +470,7 @@ function CandidateList({
                         className="button ghost"
                         type="button"
                         disabled={busy || connection.status !== 'connected'}
-                        onClick={() => void refreshCandidate(candidate.id)}
+                        onClick={() => fireAndForget(refreshCandidate(candidate.id))}
                       >
                         {connection.status === 'connected' ? '載入證據' : '等待連線'}
                       </button>
@@ -408,15 +478,15 @@ function CandidateList({
                         candidate.status,
                       ) ? (
                       <>
-                        {candidate.status !== 'watching' ? (
-                          <button
-                            className="button ghost"
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void decide(candidate.id, 'watch')}
-                          >
-                            持續監看
-                          </button>
+                      {candidate.status !== 'watching' ? (
+                        <button
+                          className="button ghost"
+                          type="button"
+                          disabled={busy}
+                        onClick={() => fireAndForget(decide(candidate.id, 'watch'))}
+                        >
+                          持續監看
+                        </button>
                         ) : null}
                         {['pending_review', 'watching'].includes(candidate.status) ? (
                           <>
@@ -424,7 +494,7 @@ function CandidateList({
                               className="button ghost"
                               type="button"
                               disabled={busy}
-                              onClick={() => void decide(candidate.id, 'ignore')}
+                              onClick={() => fireAndForget(decide(candidate.id, 'ignore'))}
                             >
                               忽略
                             </button>
@@ -433,7 +503,7 @@ function CandidateList({
                                 className="button danger"
                                 type="button"
                                 disabled={busy}
-                                onClick={() => void startBlockHandoff(candidate)}
+                                onClick={() => fireAndForget(startBlockHandoff(candidate))}
                               >
                                 人工封鎖此帳號
                               </button>
@@ -455,7 +525,7 @@ function CandidateList({
   );
 }
 
-function Connections({ connections, onCreated }: { connections: Connection[]; onCreated: () => Promise<void> }) {
+function Connections({ connections, onCreated }: ReadonlyConnectionsProps) {
   const [username, setUsername] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
@@ -463,15 +533,9 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
   useEffect(() => {
     const result = new URLSearchParams(window.location.search).get('oauth');
     if (!result) return;
-    setMessage(
-      result === 'pending_confirmation'
-        ? 'Threads 已授權；請核對下方官方帳號後完成確認。'
-        : result === 'cancelled'
-          ? '你已取消 Threads 授權，沒有保存新憑證。'
-          : 'Threads 授權未完成，請重新開始。',
-    );
+    setMessage(oauthAuthorizationMessage(result));
     window.history.replaceState({}, '', '/connections');
-    void onCreated();
+    fireAndForget(onCreated());
   }, [onCreated]);
 
   async function submit(event: FormEvent) {
@@ -496,7 +560,8 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
     setMessage(undefined);
     try {
       const result = await api.startOAuth(connectionId);
-      window.location.assign(result.authorizationUrl);
+      const authorizationUrl = sanitizeAuthorizationUrl(result.authorizationUrl);
+      window.location.assign(authorizationUrl);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '目前無法開始 Threads OAuth。');
       setBusy(false);
@@ -521,7 +586,7 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
     <>
       <PageHeader eyebrow="Connections" title="Threads 連線" />
       <section className="connection-grid">
-        <form className="panel connection-form" onSubmit={(event) => void submit(event)}>
+        <form className="panel connection-form" onSubmit={(event) => fireAndForget(submit(event))}>
           <span className="step-number">01</span>
           <h2>建立受保護帳號草稿</h2>
           <p>輸入公開 username 只用於建立有限候選基準。正式帳號仍須由官方 Threads OAuth 回傳後再次確認。</p>
@@ -536,7 +601,7 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
           <button className="button primary" disabled={busy} type="submit">
             {busy ? '建立中…' : '建立草稿'}
           </button>
-          {message ? <p className="notice" role="status">{message}</p> : null}
+          {message ? <output className="notice">{message}</output> : null}
         </form>
         <aside className="panel boundary-card">
           <p className="eyebrow">Credential boundary</p>
@@ -566,7 +631,7 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
                     className="button primary"
                     type="button"
                     disabled={busy}
-                    onClick={() => void confirmOAuth(connection)}
+                    onClick={() => fireAndForget(confirmOAuth(connection))}
                   >
                     確認保護 @{connection.protectedUsername}
                   </button>
@@ -575,7 +640,7 @@ function Connections({ connections, onCreated }: { connections: Connection[]; on
                     className="button secondary"
                     type="button"
                     disabled={busy}
-                    onClick={() => void startOAuth(connection.id)}
+                    onClick={() => fireAndForget(startOAuth(connection.id))}
                   >
                     連線 Threads OAuth
                   </button>
@@ -603,7 +668,7 @@ const EVENT_LABELS: Record<string, string> = {
   'evidence.deleted': '私有證據已刪除',
 };
 
-function Activity({ events }: { events: ActivityEvent[] }) {
+function Activity({ events }: ReadonlyActivityProps) {
   return (
     <>
       <PageHeader eyebrow="Audit trail" title="活動紀錄" />
@@ -639,22 +704,21 @@ function Activity({ events }: { events: ActivityEvent[] }) {
 function Settings({
   connection,
   onConnectionChanged,
-}: {
-  connection?: Connection;
-  onConnectionChanged: () => Promise<void>;
-}) {
+}: ReadonlySettingsProps) {
   const [schedule, setSchedule] = useState<SchedulePreference>();
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!connection) return;
-    void api
-      .schedule(connection.id)
-      .then(({ schedule: value }) => setSchedule(value))
-      .catch((error: unknown) => {
-        setMessage(error instanceof Error ? error.message : '無法載入排程。');
-      });
+    fireAndForget(
+      api
+        .schedule(connection.id)
+        .then(({ schedule: value }) => setSchedule(value))
+        .catch((error: unknown) => {
+          setMessage(error instanceof Error ? error.message : '無法載入排程。');
+        }),
+    );
   }, [connection]);
 
   async function toggleSchedule() {
@@ -711,7 +775,7 @@ function Settings({
             className="button secondary"
             type="button"
             disabled={busy || !schedule || connection?.status !== 'connected'}
-            onClick={() => void toggleSchedule()}
+              onClick={() => fireAndForget(toggleSchedule())}
           >
             {schedule?.enabled ? '停用排程' : '啟用每日刷新'}
           </button>
@@ -728,7 +792,7 @@ function Settings({
               className="button secondary"
               type="button"
               disabled={busy || !connection || connection.status === 'revoked'}
-              onClick={() => void revokeConnection('retain')}
+              onClick={() => fireAndForget(revokeConnection('retain'))}
             >
               中斷並保留紀錄
             </button>
@@ -736,7 +800,7 @@ function Settings({
               className="button danger"
               type="button"
               disabled={busy || !connection || connection.status === 'revoked'}
-              onClick={() => void revokeConnection('delete')}
+              onClick={() => fireAndForget(revokeConnection('delete'))}
             >
               中斷並刪除資料
             </button>
@@ -776,7 +840,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    void (async () => {
+    const loadInitial = async () => {
       try {
         const verifiedIdentity = await api.identity();
         const [connectionResult, activityResult, capabilityResult] = await Promise.all([
@@ -800,7 +864,9 @@ function App() {
       } finally {
         setLoading(false);
       }
-    })();
+    };
+
+    fireAndForget(loadInitial());
   }, [refreshCandidates]);
 
   async function connectionsChanged() {
@@ -820,7 +886,7 @@ function App() {
         <p className="eyebrow">Access required</p>
         <h1>無法開啟工作區</h1>
         <p>{fatalError ?? '請重新登入。'}</p>
-        <button className="button primary" onClick={() => window.location.reload()}>重新載入</button>
+        <button className="button primary" type="button" onClick={() => window.location.reload()}>重新載入</button>
       </div>
     );
   }

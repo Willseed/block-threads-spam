@@ -88,11 +88,15 @@ function punctuationVariants(username: string): CandidateReason[] {
     if (character === '.' || character === '_') {
       const without = `${username.slice(0, index)}${username.slice(index + 1)}`;
       const replacement = character === '.' ? '_' : '.';
-      candidates.push({ username: without, reason: `${RULE_REASONS.punctuation}：移除 ${character}` });
-      candidates.push({
-        username: `${username.slice(0, index)}${replacement}${username.slice(index + 1)}`,
-        reason: `${RULE_REASONS.punctuation}：${character} → ${replacement}`,
-      });
+      candidates.push(
+        ...[
+          { username: without, reason: `${RULE_REASONS.punctuation}：移除 ${character}` },
+          {
+            username: `${username.slice(0, index)}${replacement}${username.slice(index + 1)}`,
+            reason: `${RULE_REASONS.punctuation}：${character} → ${replacement}`,
+          },
+        ],
+      );
     }
   }
 
@@ -100,12 +104,12 @@ function punctuationVariants(username: string): CandidateReason[] {
     const left = username[index - 1];
     const right = username[index];
     if (left === '.' || left === '_' || right === '.' || right === '_') continue;
-    for (const punctuation of ['.', '_']) {
-      candidates.push({
+    candidates.push(
+      ...['.', '_'].map((punctuation) => ({
         username: `${username.slice(0, index)}${punctuation}${username.slice(index)}`,
         reason: `${RULE_REASONS.punctuation}：加入 ${punctuation}`,
-      });
-    }
+      })),
+    );
   }
 
   return candidates;

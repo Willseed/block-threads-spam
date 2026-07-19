@@ -112,8 +112,8 @@ export class ConnectionCoordinator extends DurableObject<AppBindings> {
           revoked: false,
           lastGeneration: 0,
         };
-      } else {
-        if (!ownerMatches(state, input.ownerDigest)) return { status: 'ownership_mismatch' };
+      } else if (!ownerMatches(state, input.ownerDigest)) {
+        return { status: 'ownership_mismatch' };
       }
 
       if (state.revoked) {

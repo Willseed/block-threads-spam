@@ -140,6 +140,12 @@ function optionalTextSignal(
   return { kind, score, contribution: contribution(score, weight), explanation };
 }
 
+function reviewPriority(score: number): ReviewPriority {
+  if (score >= 70) return 'high';
+  if (score >= 40) return 'medium';
+  return 'low';
+}
+
 export function assessProfileSimilarity(
   protectedProfile: ProfileSignals,
   candidateProfile: ProfileSignals,
@@ -190,7 +196,7 @@ export function assessProfileSimilarity(
     100,
     signals.reduce((sum, signal) => sum + signal.contribution, 0),
   );
-  const priority: ReviewPriority = score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low';
+  const priority = reviewPriority(score);
 
   return { score, priority, signals, disclaimer: DISCLAIMER };
 }

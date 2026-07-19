@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import type {
   ProfileLookupRequest,
   ProfileLookupResult,
@@ -5,8 +6,7 @@ import type {
 } from './types';
 
 export class FailClosedThreadsProfileAdapter implements ThreadsProfileAdapter {
-  lookup(request: ProfileLookupRequest): Promise<ProfileLookupResult> {
-    void request;
+  lookup(_request: ProfileLookupRequest): Promise<ProfileLookupResult> {
     return Promise.resolve({ status: 'unavailable', reason: 'capability_unavailable' });
   }
 }

@@ -11,12 +11,13 @@ interface SensitiveAction {
 }
 
 function classify(method: string, path: string): SensitiveAction | undefined {
+  const connectionMatch = /^\/api\/connections\/([^/]+)\//u.exec(path);
   if (method !== 'POST') return undefined;
   if (path === '/api/connections') {
     return { action: 'connection_create', limit: 10, windowSeconds: 3600 };
   }
 
-  const connectionId = path.match(/^\/api\/connections\/([^/]+)\//u)?.[1];
+  const connectionId = connectionMatch?.[1];
   if (path.endsWith('/oauth/start')) {
     return { action: 'oauth_start', limit: 5, windowSeconds: 900, connectionId };
   }
