@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { FormEvent, ReactElement, ReactNode } from 'react';
 import {
   BrowserRouter,
   Link,
@@ -63,6 +63,17 @@ type ReadonlySettingsProps = Readonly<{
   onConnectionChanged: () => Promise<void>;
 }>;
 
+type NavigationItem = {
+  to: `/${string}`;
+  label: string;
+  glyph: string;
+  end?: boolean;
+};
+
+type OAuthAuthorizationResult = 'pending_confirmation' | 'cancelled' | 'unknown';
+
+type CandidateAction = 'watch' | 'ignore' | 'resume';
+
 const STATUS_LABELS: Record<Connection['status'], string> = {
   awaiting_identity_confirmation: '等待確認',
   connected: '已連線',
@@ -72,13 +83,35 @@ const STATUS_LABELS: Record<Connection['status'], string> = {
   revoked: '已撤銷',
 };
 
-const NAVIGATION = [
+const NAVIGATION: readonly NavigationItem[] = [
   { to: '/', label: '儀表板', glyph: '◫', end: true },
   { to: '/candidates', label: '候選帳號', glyph: '◎' },
   { to: '/activity', label: '活動紀錄', glyph: '≋' },
   { to: '/connections', label: '連線', glyph: '↗' },
   { to: '/settings', label: '設定', glyph: '◇' },
 ] as const;
+
+const REVIEW_QUEUE_STATUSES = [
+  'pending_review',
+  'watching',
+  'not_found',
+  'lookup_unavailable',
+] as const;
+
+const REVIEW_QUEUE_STATUS_SET = new Set<string>(REVIEW_QUEUE_STATUSES);
+
+const DECISION_MESSAGES: Record<CandidateAction, string> = {
+  watch: '已將這個候選加入監看。',
+  ignore: '已忽略這個候選。',
+  resume: '已恢復監看這個候選。',
+};
+
+const OAUTH_AUTHORIZATION_MESSAGES: Record<'pending_confirmation' | 'cancelled', string> = {
+  pending_confirmation: 'Threads 已授權；請核對下方官方帳號後完成確認。',
+  cancelled: '你已取消 Threads 授權，沒有保存新憑證。',
+};
+
+const OAUTH_AUTHORIZATION_DEFAULT_MESSAGE = 'Threads 授權未完成，請重新開始。';
 
 const PRIORITY_LABELS: Record<Candidate['priority'], string> = {
   high: '高',
@@ -89,11 +122,11 @@ const PRIORITY_LABELS: Record<Candidate['priority'], string> = {
 const OAUTH_AUTHORIZATION_HOSTS = new Set(['threads.com', 'www.threads.com']);
 
 function oauthAuthorizationMessage(result: string): string {
-  return result === 'pending_confirmation'
-    ? 'Threads 已授權；請核對下方官方帳號後完成確認。'
-    : result === 'cancelled'
-      ? '你已取消 Threads 授權，沒有保存新憑證。'
-      : 'Threads 授權未完成，請重新開始。';
+  const parsed = result as OAuthAuthorizationResult;
+  if (parsed === 'pending_confirmation' || parsed === 'cancelled') {
+    return OAUTH_AUTHORIZATION_MESSAGES[parsed];
+  }
+  return OAUTH_AUTHORIZATION_DEFAULT_MESSAGE;
 }
 
 function sanitizeAuthorizationUrl(raw: string): string {
@@ -106,6 +139,39 @@ function sanitizeAuthorizationUrl(raw: string): string {
     throw new Error('Invalid OAuth authorization URL');
   }
   return authorizationUrl.toString();
+}
+
+function sanitizeHandoffEntryPath(raw: string): string {
+  const handoffUrl = new URL(raw, window.location.origin);
+  if (
+    handoffUrl.origin !== window.location.origin ||
+    !handoffUrl.pathname.startsWith('/api/handoffs/')
+  ) {
+    throw new Error('Invalid handoff entry path');
+  }
+  return `${handoffUrl.pathname}${handoffUrl.search}${handoffUrl.hash}`;
+}
+
+function candidateActionMessage(action: CandidateAction): string {
+  return DECISION_MESSAGES[action];
+}
+
+function statusMessageFromResult(
+  status: 'confirmed_success' | 'unknown_needs_review',
+  target: string,
+): string {
+  if (status === 'confirmed_success') {
+    return `已確認 @${target} 的人工操作結果。`;
+  }
+  return `@${target} 的結果不明，已停止且不會重試，請人工複查。`;
+}
+
+function isReviewQueueStatus(status: Candidate['status']): boolean {
+  return REVIEW_QUEUE_STATUS_SET.has(status);
+}
+
+function getCandidateSourceLabel(candidate: Candidate): string {
+  return candidate.sourceType === 'manual' ? '人工目標' : candidate.sourceRules.join('、');
 }
 
 function formatDate(value: string) {
@@ -154,12 +220,13 @@ function Layout({
           <span className="brand-mark">T</span>
           <span>
             Variant Guard
+            {' '}
             <small>Threads 防護</small>
           </span>
         </Link>
         <nav aria-label="主要導覽">
           {NAVIGATION.map((item) => (
-            <NavLink key={item.to} to={item.to} end={'end' in item ? item.end : false}>
+            <NavLink key={item.to} to={item.to} end={item.end === true}>
               <span aria-hidden="true">{item.glyph}</span>
               {item.label}
             </NavLink>
@@ -169,6 +236,7 @@ function Layout({
           <span className="avatar">{identity.email?.slice(0, 1).toUpperCase() ?? 'U'}</span>
           <span>
             {identity.email ?? '已驗證使用者'}
+            {' '}
             <small>Cloudflare Access</small>
           </span>
         </div>
@@ -298,23 +366,17 @@ function CandidateList({
     }
   }
 
-  async function decide(candidateId: string, action: 'watch' | 'ignore' | 'resume') {
+  async function decide(candidateId: string, action: CandidateAction) {
     if (!connection) return;
     setBusy(true);
     setMessage(undefined);
-    try {
-      await api.decideCandidate(connection.id, candidateId, action);
-      setMessage(
-        action === 'ignore'
-          ? '已忽略這個候選。'
-          : action === 'resume'
-            ? '已恢復監看這個候選。'
-            : '已將這個候選加入監看。',
-      );
-      await onRefresh();
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : '無法儲存候選決定。');
-    } finally {
+      try {
+        await api.decideCandidate(connection.id, candidateId, action);
+        setMessage(candidateActionMessage(action));
+        await onRefresh();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : '無法儲存候選決定。');
+      } finally {
       setBusy(false);
     }
   }
@@ -356,7 +418,7 @@ function CandidateList({
       setPendingHandoff(pending);
       const form = document.createElement('form');
       form.method = 'POST';
-      form.action = started.handoff.enterPath;
+      form.action = sanitizeHandoffEntryPath(started.handoff.enterPath);
       form.hidden = true;
       document.documentElement.appendChild(form);
       form.submit();
@@ -374,17 +436,97 @@ function CandidateList({
       const { result } = await api.completeHandoff(pendingHandoff.id);
       window.sessionStorage.removeItem('pending-block-handoff');
       setPendingHandoff(null);
-      setMessage(
-        result.status === 'confirmed_success'
-          ? `已確認 @${result.exactTargetUsername} 的人工操作結果。`
-          : `@${result.exactTargetUsername} 的結果不明，已停止且不會重試，請人工複查。`,
-      );
+      setMessage(statusMessageFromResult(result.status, result.exactTargetUsername));
       await onRefresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '無法驗證人工操作結果。');
     } finally {
       setBusy(false);
     }
+  }
+
+  function actionsForCandidate(candidate: Candidate): ReactElement {
+    if (!connection) {
+      return (
+        <button className="button ghost" type="button" disabled>
+          等待連線
+        </button>
+      );
+    }
+
+    if (candidate.status === 'ignored') {
+      return (
+        <button
+          className="button ghost"
+          type="button"
+          disabled={busy}
+          onClick={() => fireAndForget(decide(candidate.id, 'resume'))}
+        >
+          恢復監看
+        </button>
+      );
+    }
+
+    if (candidate.status === 'new') {
+      const isConnected = connection.status === 'connected';
+      return (
+        <button
+          className="button ghost"
+          type="button"
+          disabled={busy || !isConnected}
+          onClick={() => fireAndForget(refreshCandidate(candidate.id))}
+        >
+          {isConnected ? '載入證據' : '等待連線'}
+        </button>
+      );
+    }
+
+    if (isReviewQueueStatus(candidate.status)) {
+      const shouldWatch = candidate.status !== 'watching';
+      const shouldIgnore = candidate.status === 'pending_review' || candidate.status === 'watching';
+      return (
+        <>
+          {shouldWatch ? (
+            <button
+              className="button ghost"
+              type="button"
+              disabled={busy}
+              onClick={() => fireAndForget(decide(candidate.id, 'watch'))}
+            >
+              持續監看
+            </button>
+          ) : null}
+          {shouldIgnore ? (
+            <>
+              <button
+                className="button ghost"
+                type="button"
+                disabled={busy}
+                onClick={() => fireAndForget(decide(candidate.id, 'ignore'))}
+              >
+                忽略
+              </button>
+              {canManualHandoff ? (
+                <button
+                  className="button danger"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => fireAndForget(startBlockHandoff(candidate))}
+                >
+                  人工封鎖此帳號
+                </button>
+              ) : null}
+            </>
+          ) : null}
+        </>
+      );
+    }
+
+    return (
+      <button className="button ghost" type="button" disabled>
+        等待掃描
+      </button>
+    );
   }
 
   return (
@@ -407,6 +549,7 @@ function CandidateList({
           <form className="inline-form panel" onSubmit={(event) => fireAndForget(addManual(event))}>
             <label htmlFor="manual-candidate">
               人工加入已知帳號
+              {' '}
               <small>只接受一個完整 username，不支援搜尋或萬用字元。</small>
             </label>
             <div>
@@ -451,69 +594,12 @@ function CandidateList({
                     </div>
                     <p>{candidate.reasons[0] ?? '使用者人工加入'}</p>
                     <small>
-                      {candidate.sourceType === 'manual' ? '人工目標' : candidate.sourceRules.join('、')} ·{' '}
+                      {getCandidateSourceLabel(candidate)} ·{' '}
                       {formatDate(candidate.firstSeenAt)}
                     </small>
                   </div>
                   <div className="candidate-actions">
-                    {candidate.status === 'ignored' ? (
-                      <button
-                        className="button ghost"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => fireAndForget(decide(candidate.id, 'resume'))}
-                      >
-                        恢復監看
-                      </button>
-                    ) : candidate.status === 'new' ? (
-                      <button
-                        className="button ghost"
-                        type="button"
-                        disabled={busy || connection.status !== 'connected'}
-                        onClick={() => fireAndForget(refreshCandidate(candidate.id))}
-                      >
-                        {connection.status === 'connected' ? '載入證據' : '等待連線'}
-                      </button>
-                    ) : ['pending_review', 'watching', 'not_found', 'lookup_unavailable'].includes(
-                        candidate.status,
-                      ) ? (
-                      <>
-                      {candidate.status !== 'watching' ? (
-                        <button
-                          className="button ghost"
-                          type="button"
-                          disabled={busy}
-                        onClick={() => fireAndForget(decide(candidate.id, 'watch'))}
-                        >
-                          持續監看
-                        </button>
-                        ) : null}
-                        {['pending_review', 'watching'].includes(candidate.status) ? (
-                          <>
-                            <button
-                              className="button ghost"
-                              type="button"
-                              disabled={busy}
-                              onClick={() => fireAndForget(decide(candidate.id, 'ignore'))}
-                            >
-                              忽略
-                            </button>
-                            {canManualHandoff ? (
-                              <button
-                                className="button danger"
-                                type="button"
-                                disabled={busy}
-                                onClick={() => fireAndForget(startBlockHandoff(candidate))}
-                              >
-                                人工封鎖此帳號
-                              </button>
-                            ) : null}
-                          </>
-                        ) : null}
-                      </>
-                    ) : (
-                      <button className="button ghost" type="button" disabled>等待掃描</button>
-                    )}
+                    {actionsForCandidate(candidate)}
                   </div>
                 </article>
               ))}
@@ -775,7 +861,7 @@ function Settings({
             className="button secondary"
             type="button"
             disabled={busy || !schedule || connection?.status !== 'connected'}
-              onClick={() => fireAndForget(toggleSchedule())}
+            onClick={() => fireAndForget(toggleSchedule())}
           >
             {schedule?.enabled ? '停用排程' : '啟用每日刷新'}
           </button>
