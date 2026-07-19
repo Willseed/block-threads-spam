@@ -7,6 +7,7 @@ import { parseUsername } from '../../domain/usernames';
 import {
   CandidateAlreadyExistsError,
   CandidateDecisionConflictError,
+  ApprovalPreconditionError,
   TenantAuthorizationError,
 } from '../../platform/d1/repository';
 import { R2EvidenceRepository } from '../../platform/r2/evidence-repository';
@@ -36,6 +37,25 @@ const revocationInput = z.object({
 const decisionInput = z.object({
   action: z.enum(['watch', 'ignore', 'resume']),
 });
+
+const approvalInput = z.object({
+  exactTargetUsername: z.string().min(1).max(31),
+});
+
+const APPROVAL_TTL_MILLISECONDS = 5 * 60 * 1000;
+const MAX_EVIDENCE_AGE_MILLISECONDS = 15 * 60 * 1000;
+
+function randomActionToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+async function hashActionToken(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 function validationError() {
   return {
@@ -225,6 +245,103 @@ connectionRoutes.patch('/:connectionId/candidates/:candidateId', async (context)
     throw error;
   }
 });
+
+connectionRoutes.post(
+  '/:connectionId/candidates/:candidateId/approvals',
+  requireRecentAuthentication,
+  async (context) => {
+    if (context.env.FEATURE_MANUAL_BLOCK_HANDOFF !== 'true') {
+      return context.json(
+        { error: { code: 'capability_unavailable', message: '人工封鎖交接目前未啟用。' } },
+        503,
+      );
+    }
+    const identity = context.get('identity');
+    if (!identity.sessionBinding) {
+      return context.json(
+        { error: { code: 'reauthentication_required', message: '請重新登入本服務後再試。' } },
+        403,
+      );
+    }
+    const body: unknown = await context.req.json().catch(() => undefined);
+    const parsed = approvalInput.safeParse(body);
+    if (!parsed.success) return context.json(validationError(), 400);
+    let exactTargetUsername: string;
+    try {
+      exactTargetUsername = parseUsername(parsed.data.exactTargetUsername);
+    } catch {
+      return context.json(validationError(), 400);
+    }
+
+    const tenant = context.get('tenant');
+    const repository = context.get('repository');
+    const connectionId = context.req.param('connectionId');
+    const candidateId = context.req.param('candidateId');
+    const [connection, candidate] = await Promise.all([
+      repository.getConnection(tenant, connectionId),
+      repository.getCandidate(tenant, connectionId, candidateId),
+    ]);
+    if (!connection || !candidate) {
+      return context.json(
+        { error: { code: 'not_found', message: '找不到指定的候選帳號。' } },
+        404,
+      );
+    }
+    const checkedAt = candidate.lastCheckedAt ? Date.parse(candidate.lastCheckedAt) : Number.NaN;
+    const evidenceAge = Date.now() - checkedAt;
+    if (
+      connection.status !== 'connected' ||
+      candidate.username !== exactTargetUsername ||
+      !candidate.currentSnapshotId ||
+      !candidate.targetPlatformId ||
+      !Number.isFinite(evidenceAge) ||
+      evidenceAge < -60_000 ||
+      evidenceAge > MAX_EVIDENCE_AGE_MILLISECONDS
+    ) {
+      return context.json(
+        {
+          error: {
+            code: 'approval_precondition_failed',
+            message: '請先重新載入候選證據並確認完整目標。',
+          },
+        },
+        409,
+      );
+    }
+
+    const actionToken = randomActionToken();
+    const expiresAt = new Date(Date.now() + APPROVAL_TTL_MILLISECONDS).toISOString();
+    try {
+      const approval = await repository.issueApproval(
+        tenant,
+        connectionId,
+        candidateId,
+        exactTargetUsername,
+        identity.sessionBinding,
+        await hashActionToken(actionToken),
+        expiresAt,
+      );
+      return context.json(
+        { approval, actionToken },
+        201,
+        { 'cache-control': 'private, no-store' },
+      );
+    } catch (error) {
+      if (error instanceof ApprovalPreconditionError) {
+        return context.json(
+          {
+            error: {
+              code: 'approval_precondition_failed',
+              message: '候選狀態已變更，請重新載入後再確認。',
+            },
+          },
+          409,
+        );
+      }
+      throw error;
+    }
+  },
+);
 
 connectionRoutes.post('/:connectionId/candidates/generate', async (context) => {
   const body: unknown = await context.req.json().catch(() => ({}));

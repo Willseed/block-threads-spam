@@ -58,6 +58,17 @@ export interface CandidateRecord {
     | 'lookup_unavailable';
   priority: 'low' | 'medium' | 'high';
   firstSeenAt: string;
+  currentSnapshotId?: string;
+  targetPlatformId?: string;
+  lastCheckedAt?: string;
+}
+
+export interface IssuedApproval {
+  id: string;
+  exactTargetUsername: string;
+  targetPlatformId: string;
+  evidenceVersion: string;
+  expiresAt: string;
 }
 
 export interface NewCandidate {
@@ -139,6 +150,15 @@ export interface ApplicationRepository {
     candidateId: string,
     event: Extract<CandidateEvent, 'mark_watching' | 'ignore'>,
   ): Promise<CandidateRecord>;
+  issueApproval(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+    exactTargetUsername: string,
+    sessionBinding: string,
+    nonceHash: string,
+    expiresAt: string,
+  ): Promise<IssuedApproval>;
   addGeneratedCandidates(
     tenant: TenantContext,
     connectionId: string,
@@ -183,6 +203,9 @@ interface CandidateRow {
   status: CandidateRecord['status'];
   priority: CandidateRecord['priority'];
   first_seen_at: string;
+  current_snapshot_id: string | null;
+  target_platform_id: string | null;
+  last_checked_at: string | null;
 }
 
 export class TenantAuthorizationError extends Error {
@@ -203,6 +226,13 @@ export class CandidateDecisionConflictError extends Error {
   constructor() {
     super('Candidate state changed before the decision was saved');
     this.name = 'CandidateDecisionConflictError';
+  }
+}
+
+export class ApprovalPreconditionError extends Error {
+  constructor() {
+    super('Approval preconditions are not satisfied');
+    this.name = 'ApprovalPreconditionError';
   }
 }
 
@@ -237,6 +267,9 @@ function candidateRecord(row: CandidateRow): CandidateRecord {
     status: row.status,
     priority: row.priority,
     firstSeenAt: row.first_seen_at,
+    ...(row.current_snapshot_id ? { currentSnapshotId: row.current_snapshot_id } : {}),
+    ...(row.target_platform_id ? { targetPlatformId: row.target_platform_id } : {}),
+    ...(row.last_checked_at ? { lastCheckedAt: row.last_checked_at } : {}),
   };
 }
 
@@ -760,7 +793,10 @@ export class D1Repository implements ApplicationRepository {
   ): Promise<CandidateRecord[]> {
     const { results } = await this.#db
       .prepare(
-        `SELECT id, username, source_type, source_rules_json, reasons_json, status, priority, first_seen_at
+        `SELECT id, username, source_type, source_rules_json, reasons_json, status, priority,
+                first_seen_at, current_snapshot_id, last_checked_at,
+                (SELECT platform_id FROM candidate_snapshots
+                 WHERE id = candidates.current_snapshot_id) AS target_platform_id
          FROM candidates
          WHERE tenant_id = ? AND connection_id = ?
            AND EXISTS (
@@ -782,7 +818,9 @@ export class D1Repository implements ApplicationRepository {
     const row = await this.#db
       .prepare(
         `SELECT id, username, source_type, source_rules_json, reasons_json, status, priority,
-                first_seen_at
+                first_seen_at, current_snapshot_id, last_checked_at,
+                (SELECT platform_id FROM candidate_snapshots
+                 WHERE id = candidates.current_snapshot_id) AS target_platform_id
          FROM candidates
          WHERE id = ? AND tenant_id = ? AND connection_id = ?
            AND EXISTS (
@@ -813,14 +851,15 @@ export class D1Repository implements ApplicationRepository {
         this.#db
           .prepare(
             `INSERT INTO candidate_snapshots
-               (id, candidate_id, source, username, display_name, biography_excerpt,
+               (id, candidate_id, source, platform_id, username, display_name, biography_excerpt,
                 similarity_reasons_json, checked_at)
-             SELECT ?, id, 'meta_api', ?, ?, ?, ?, ?
+             SELECT ?, id, 'meta_api', ?, ?, ?, ?, ?, ?
              FROM candidates
              WHERE id = ? AND tenant_id = ? AND connection_id = ?`,
           )
           .bind(
             snapshotId,
+            update.profile.platformId ?? null,
             update.profile.username,
             update.profile.displayName ?? null,
             update.profile.biography?.slice(0, 500) ?? null,
@@ -966,6 +1005,128 @@ export class D1Repository implements ApplicationRepository {
     const updated = await this.getCandidate(tenant, connectionId, candidateId);
     if (!updated) throw new TenantAuthorizationError();
     return updated;
+  }
+
+  async issueApproval(
+    tenant: TenantContext,
+    connectionId: string,
+    candidateId: string,
+    exactTargetUsername: string,
+    sessionBinding: string,
+    nonceHash: string,
+    expiresAt: string,
+  ): Promise<IssuedApproval> {
+    if (!/^[a-f0-9]{64}$/u.test(sessionBinding) || !/^[a-f0-9]{64}$/u.test(nonceHash)) {
+      throw new TypeError('Invalid approval binding');
+    }
+    const candidate = await this.getCandidate(tenant, connectionId, candidateId);
+    if (
+      !candidate ||
+      candidate.username !== exactTargetUsername ||
+      !candidate.currentSnapshotId ||
+      !candidate.targetPlatformId ||
+      !candidate.lastCheckedAt
+    ) {
+      throw new ApprovalPreconditionError();
+    }
+    let nextStatus: CandidateRecord['status'];
+    try {
+      nextStatus = transitionCandidate(candidate.status, 'prepare_block');
+    } catch (error) {
+      if (error instanceof InvalidStateTransitionError) throw new ApprovalPreconditionError();
+      throw error;
+    }
+    const expiry = Date.parse(expiresAt);
+    const now = this.#now();
+    if (!Number.isFinite(expiry) || expiry <= now.getTime()) throw new ApprovalPreconditionError();
+    const approvalId = `apr_${this.#idFactory()}`;
+    const auditId = `aud_${this.#idFactory()}`;
+    const issuedAt = now.toISOString();
+    const results = await this.#db.batch([
+      this.#db
+        .prepare(
+          `INSERT INTO approvals
+             (id, tenant_id, user_id, connection_id, candidate_id, exact_target_username,
+              target_platform_id, evidence_version, nonce_hash, status, issued_at, expires_at,
+              session_binding)
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?
+           WHERE EXISTS (
+             SELECT 1 FROM candidates
+             WHERE id = ? AND tenant_id = ? AND connection_id = ? AND status = ?
+               AND current_snapshot_id = ?
+           ) AND EXISTS (
+             SELECT 1 FROM threads_connections
+             WHERE id = ? AND tenant_id = ? AND status = 'connected'
+           ) AND NOT EXISTS (
+             SELECT 1 FROM approvals
+             WHERE tenant_id = ? AND candidate_id = ?
+               AND status IN ('issued', 'consuming') AND expires_at > ?
+           )`,
+        )
+        .bind(
+          approvalId,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          candidateId,
+          exactTargetUsername,
+          candidate.targetPlatformId,
+          candidate.currentSnapshotId,
+          nonceHash,
+          issuedAt,
+          expiresAt,
+          sessionBinding,
+          candidateId,
+          tenant.tenantId,
+          connectionId,
+          candidate.status,
+          candidate.currentSnapshotId,
+          connectionId,
+          tenant.tenantId,
+          tenant.tenantId,
+          candidateId,
+          issuedAt,
+        ),
+      this.#db
+        .prepare(
+          `UPDATE candidates SET status = ?
+           WHERE id = ? AND tenant_id = ? AND connection_id = ? AND status = ?
+             AND EXISTS (SELECT 1 FROM approvals WHERE id = ? AND status = 'issued')`,
+        )
+        .bind(
+          nextStatus,
+          candidateId,
+          tenant.tenantId,
+          connectionId,
+          candidate.status,
+          approvalId,
+        ),
+      this.#db
+        .prepare(
+          `INSERT INTO audit_events
+             (id, tenant_id, actor_user_id, connection_id, event_type, target_ref,
+              metadata_json, created_at)
+           SELECT ?, ?, ?, ?, 'approval.issued', exact_target_username, ?, ?
+           FROM approvals WHERE id = ? AND status = 'issued'`,
+        )
+        .bind(
+          auditId,
+          tenant.tenantId,
+          tenant.userId,
+          connectionId,
+          JSON.stringify({ candidateId, evidenceVersion: candidate.currentSnapshotId }),
+          issuedAt,
+          approvalId,
+        ),
+    ]);
+    if (results.some(({ meta }) => meta.changes !== 1)) throw new ApprovalPreconditionError();
+    return {
+      id: approvalId,
+      exactTargetUsername,
+      targetPlatformId: candidate.targetPlatformId,
+      evidenceVersion: candidate.currentSnapshotId,
+      expiresAt,
+    };
   }
 
   async addGeneratedCandidates(

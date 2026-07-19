@@ -8,6 +8,7 @@ import type {
 } from './types';
 
 const profileSchema = z.object({
+  id: z.union([z.string().min(1), z.number().int().nonnegative()]).transform(String).optional(),
   username: z.string(),
   name: z.string().optional(),
   biography: z.string().optional(),
@@ -99,6 +100,7 @@ export class MetaThreadsProfileAdapter implements ThreadsProfileAdapter {
     return {
       status: 'found',
       profile: {
+        ...(parsed.data.id ? { platformId: parsed.data.id } : {}),
         username: returnedUsername,
         ...(parsed.data.name ? { displayName: parsed.data.name } : {}),
         ...(parsed.data.biography ? { biography: parsed.data.biography } : {}),

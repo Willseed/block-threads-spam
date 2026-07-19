@@ -1,4 +1,5 @@
 export interface ThreadsPublicProfile {
+  platformId?: string;
   username: string;
   displayName?: string;
   biography?: string;

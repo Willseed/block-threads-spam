@@ -10,7 +10,12 @@ function applicationFor(subject: string, recent = false) {
     verify: () =>
       Promise.resolve({
         subject,
-        ...(recent ? { authenticatedAt: new Date().toISOString() } : {}),
+        ...(recent
+          ? {
+              authenticatedAt: new Date().toISOString(),
+              sessionBinding: 'f'.repeat(64),
+            }
+          : {}),
       }),
   };
   return createApp({ identityVerifier: verifier });
@@ -409,5 +414,65 @@ describe('connection and manual candidate API', () => {
     await expect(response.json()).resolves.toMatchObject({
       error: { code: 'invalid_candidate_state' },
     });
+  });
+
+  it('issues one short-lived approval bound to the current evidence and session', async () => {
+    const connection = await createConnection();
+    await installConnectedCredential(connection.id);
+    const app = applicationFor('idp|owner', true);
+    const createResponse = await app.request(
+      `/api/connections/${connection.id}/candidates`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: 'will.seed' }),
+      },
+      env,
+    );
+    const candidate = (await createResponse.json<{ candidate: { id: string } }>()).candidate;
+    const refresh = await app.request(
+      `/api/connections/${connection.id}/candidates/${candidate.id}/refresh`,
+      { method: 'POST' },
+      env,
+    );
+    expect(refresh.status).toBe(200);
+
+    const response = await app.request(
+      `/api/connections/${connection.id}/candidates/${candidate.id}/approvals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ exactTargetUsername: '@Will.Seed' }),
+      },
+      env,
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    const body = await response.json<{
+      approval: { id: string; exactTargetUsername: string; evidenceVersion: string };
+      actionToken: string;
+    }>();
+    expect(body.approval.exactTargetUsername).toBe('will.seed');
+    expect(body.approval.evidenceVersion).toMatch(/^snp_/);
+    expect(body.actionToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const stored = await env.DB.prepare(
+      `SELECT nonce_hash, session_binding, status FROM approvals WHERE id = ?`,
+    )
+      .bind(body.approval.id)
+      .first<{ nonce_hash: string; session_binding: string; status: string }>();
+    expect(stored).toMatchObject({ session_binding: 'f'.repeat(64), status: 'issued' });
+    expect(stored?.nonce_hash).not.toBe(body.actionToken);
+
+    const repeated = await app.request(
+      `/api/connections/${connection.id}/candidates/${candidate.id}/approvals`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ exactTargetUsername: 'will.seed' }),
+      },
+      env,
+    );
+    expect(repeated.status).toBe(409);
   });
 });

@@ -204,7 +204,11 @@ describe('ConnectionCoordinator', () => {
 
     expect(result).toEqual({
       status: 'found',
-      profile: { username: 'candidate.name', displayName: 'Candidate Name' },
+      profile: {
+        platformId: 'platform-candidate.name',
+        username: 'candidate.name',
+        displayName: 'Candidate Name',
+      },
     });
     expect(JSON.stringify(result)).not.toContain(CREDENTIAL.accessToken);
   });

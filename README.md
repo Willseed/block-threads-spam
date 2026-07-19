@@ -62,6 +62,8 @@ Wrangler 設定使用 automatic provisioning：首次 deploy 時會為只宣告 
 
 `PATCH /api/connections/:connectionId/candidates/:candidateId` 只接受單一候選的 `watch`、`ignore` 或 `resume` 決定。伺服器用狀態機驗證轉移並以舊狀態作 compare-and-set，衝突會要求重新載入；每次成功決定都寫入 tenant-scoped 稽核。
 
+`POST /api/connections/:connectionId/candidates/:candidateId/approvals` 需要近期再驗證、同一 Access session、已連線帳號、15 分鐘內的官方快照、完整 username 與平台 ID。批准固定綁定單一證據版本，五分鐘失效；只回傳一次的 action token 在 D1 僅保存 SHA-256，重複或狀態衝突不會簽發第二份有效批准。
+
 ## Threads 個人檔案查詢
 
 候選存在性與公開摘要採官方 `GET /profile_lookup?username=...` adapter，所需權限為 `threads_profile_discovery`。Adapter 只查一個已驗證的完整 username，並將 provider 結果縮減成 allowlist 欄位。權限不足、限流、回應格式變更或 target 不一致都會回傳明確的不可用分類；production 預設 adapter 不會降級成 Threads 網頁爬取。

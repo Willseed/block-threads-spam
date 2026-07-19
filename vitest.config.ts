@@ -18,6 +18,7 @@ function testOutboundService(request: Request): Response {
   const username = url.searchParams.get('username') ?? '';
   return new Response(
     JSON.stringify({
+      id: `platform-${username}`,
       username,
       name: username === 'will.seed' ? 'Will Seed' : 'Candidate Name',
       biography: username === 'will.seed' ? 'Product studio' : undefined,
@@ -38,6 +39,7 @@ export default defineConfig({
           META_APP_ID: 'test-meta-app-id',
           META_APP_SECRET: 'test-meta-app-secret',
           FEATURE_META_PROFILE_LOOKUP: 'true',
+          FEATURE_MANUAL_BLOCK_HANDOFF: 'true',
         },
         d1Databases: ['DB'],
         r2Buckets: ['EVIDENCE'],

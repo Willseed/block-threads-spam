@@ -14,6 +14,7 @@ describe('MetaThreadsProfileAdapter', () => {
   it('looks up one exact username and maps only allowlisted profile fields', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       jsonResponse({
+        id: '17841400000000099',
         username: 'will.seed',
         name: 'Will Seed',
         biography: 'Product studio',
@@ -30,6 +31,7 @@ describe('MetaThreadsProfileAdapter', () => {
     expect(result).toEqual({
       status: 'found',
       profile: {
+        platformId: '17841400000000099',
         username: 'will.seed',
         displayName: 'Will Seed',
         biography: 'Product studio',
