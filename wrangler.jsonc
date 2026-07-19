@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "threads-variant-guard",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-07-19",
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "not_found_handling": "single-page-application"
+  }
+}
