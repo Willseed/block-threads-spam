@@ -25,7 +25,8 @@ timestamp: "2026-07-20T12:00:00+08:00"
 | D1 | 關聯資料層 | 保存使用者、連線帳號、候選、決策、工作、通知與稽核中繼資料 | 不保存明文 OAuth token、Threads 密碼或 Live View capability |
 | Durable Object 儲存 | 敏感狀態層 | 保存每連線應用層加密的 OAuth token、被包裝資料金鑰與協調狀態 | 不允許跨租戶鍵值讀取 |
 | R2 | 證據物件層 | 保存私有候選截圖、封鎖前後證據及必要診斷物件 | 不提供匿名公開網址 |
-| Workers Secrets | 執行期機密層 | 保存主加密金鑰、服務端簽章金鑰、Access 設定與 Meta App 機密 | 不保存 Cloudflare 部署 token；不保存每位使用者的明文 token |
+| Worker vars | 公開執行期設定層 | 保存 Access team origin、主 Application audience 與 feature flags | 不保存憑證、簽章金鑰或 token；變更後必須重新部署 |
+| Workers Secrets | 執行期機密層 | 保存主加密金鑰、服務端簽章金鑰與 Meta App 機密 | 不保存 Cloudflare 部署 token；不保存每位使用者的明文 token |
 | Cron Trigger | 排程入口 | 依低頻策略啟動已同意排程的帳號掃描 | 不啟動封鎖 |
 | Turnstile 與速率限制 | 濫用防護 | 保護註冊、登入、連線建立與敏感動作端點 | 不取代使用者身分驗證或業務授權 |
 | Threads | 外部平台 | 提供登入、個人檔案與封鎖介面 | 不受本系統控制，頁面與風控可能隨時改變 |
@@ -36,7 +37,7 @@ Worker、Durable Object 與 Workflows 組成控制平面。它們決定誰可以
 
 Browser Run 是可選人工執行平面。它只在 feature flag 與 provider 驗證通過後，接收已由控制平面限制的單一封鎖交接任務；OAuth 登入與官方 profile 查詢不依賴 Browser Run。
 
-GitHub Actions 是獨立部署平面。verify job 不綁定 environment，也不取得部署 secrets。只有完整品質閘門成功後，明確限制 `refs/heads/main` 的 deploy job 才進入已設定 exact `main` 的 `production` environment，使用最小權限帳戶 token 呼叫 Cloudflare，並把 `TEAM_DOMAIN`、`POLICY_AUD`、`APP_ORIGIN`、兩個 namespace／加密金鑰及 Meta App 機密寫入 runner 暫存 `0600` secrets file。該檔只供未啟用 version upload 使用，之後依序套用 D1 migration、按 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 啟用同一次 run 上傳的 version，最後無條件清除。部署 token 不得被寫入 secrets file、Worker 設定、前端 bundle、測試 fixture 或執行期環境。
+GitHub Actions 是獨立部署平面。verify job 不綁定 environment，也不取得部署 secrets。只有完整品質閘門成功後，明確限制 `refs/heads/main` 的 deploy job 才進入已設定 exact `main` 的 `production` environment，使用最小權限帳戶 token 呼叫 Cloudflare，並把 `APP_ORIGIN`、兩個 namespace／加密金鑰、Meta App ID 與 App Secret 共五項剩餘 runtime 值寫入 runner 暫存 `0600` secrets file。Access 的 `TEAM_DOMAIN` 與主 Application `POLICY_AUD` 是公開驗證識別資訊，版本化於 Worker vars，讓 review 與部署能驗證其精確值。secrets file 只供未啟用 version upload 使用，之後依序套用 D1 migration、按 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 啟用同一次 run 上傳的 version，最後無條件清除。部署 token 不得被寫入 secrets file、Worker 設定、前端 bundle、測試 fixture 或執行期環境。
 
 Cloudflare 的 staged upload 需要 Worker service record 已存在；`versions upload` 不能建立全新的 Worker。但同名、無 binding 的 Hello World Worker 只是第一項前置條件，不能套用首次 `v1 new_sqlite_classes` Durable Object migration；實測會以 code `10211` 拒絕。首次初始化必須先精確建立或重用 D1／R2（只補缺少的資源），以明確 binding、停用 automatic provisioning 套用 D1 migrations，再以同一 `ConnectionCoordinator` class 與 migration、無 runtime secrets／assets／cron且預設回應 `503` 的 fail-closed bootstrap 執行一次正常 `wrangler deploy`。bootstrap 完成後立即由完整版本取代，後續仍走 `versions upload`、D1 migration check／apply、run-unique tag promotion；code `10211` 是已觀察到的失敗原因，不是新環境必須刻意重現的步驟。
 

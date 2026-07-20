@@ -8,7 +8,7 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 # 審核狀態
 
-本文件已依 2026-07-20 的實際部署結果更新。CI 與 Meta lifecycle 的程式、migration、GitHub Actions workflow、本機品質閘門、首次 Durable Object bootstrap、正式 staged deployment、custom domain、Cloudflare Access route boundary 及 Meta App callback URL 均已完成。bootstrap 準備階段已套用 D1 migrations `0001`–`0007`；GitHub Actions run `29696901680` attempt 4 確認 `No migrations to apply` 並啟用完整版本。本節不把匿名 invalid callback 路由驗證等同 Meta 真實 signed request 或完整 lifecycle cleanup 驗證。
+本文件已依 2026-07-20 的實際部署結果與首次允許使用者登入診斷更新。CI 與 Meta lifecycle 的程式、migration、GitHub Actions workflow、本機品質閘門、首次 Durable Object bootstrap、正式 staged deployment、custom domain、Cloudflare Access route boundary 及 Meta App callback URL 均已完成。bootstrap 準備階段已套用 D1 migrations `0001`–`0007`；GitHub Actions run `29696901680` attempt 4 確認 `No migrations to apply` 並啟用完整版本。首次登入已證明 Access 邊界可通過，但 Worker 因不透明的 issuer／audience 部署值而對 API fail closed `401`；修正將這兩項公開識別資訊版本化，且必須在 promotion 後重新執行允許使用者驗證。本節不把匿名 invalid callback 路由驗證等同 Meta 真實 signed request 或完整 lifecycle cleanup 驗證。
 
 2026-07-19 的控制平面實作是本次工作的基線：Cloudflare Access 身分驗證、租戶隔離、官方 Threads OAuth、每連線 token vault、有限候選、私有證據、一次性批准、排程不封鎖及 fail-closed handoff 已有對應程式與測試。新增 lifecycle 與 CI 後，所有既有品質結論都必須重新驗證。
 
@@ -18,7 +18,8 @@ timestamp: "2026-07-20T12:00:00+08:00"
 |---|---|---|
 | OKF 納入 repo、manifest 與索引 | 文件完成 | `manifest.json` 包含 `implementation-audit.md`；所有內部連結在 repo 子目錄可解析 |
 | GitHub Actions 部署 | 遠端驗證完成 | bootstrap 準備階段已套用 D1 migrations `0001`–`0007`；run `29696901680` attempt 4 通過無 secrets verify、main-only deploy、未啟用 version upload、確認無待辦 migration 與 run-unique tag activation。正式 tag 為 `github-75a2368a0e36fc7ba1d24a6c94bdecf126333f5b-29696901680-4` |
-| runtime secrets 傳遞 | 遠端驗證完成 | 九個 Actions secrets 已存在；deploy job 以 runner 暫存 `0600` secrets file 傳入七個 Workers Secrets，Cloudflare token 不進 runtime，`always()` cleanup 成功且 log 未顯示 secret 值 |
+| runtime 設定與 secrets 傳遞 | 修正完成／promotion 後需驗證 | 七個 Actions secrets：兩個部署認證與五個 Worker secret bindings；`TEAM_DOMAIN`／`POLICY_AUD` 改為可 review 的版本化 Worker vars。deploy job 仍以 runner 暫存 `0600` secrets file 傳入剩餘 runtime 值，Cloudflare token 不進 runtime，並由 `always()` cleanup |
+| Cloudflare Access 應用登入 | 邊界通過／Worker 修正待 promotion 後驗證 | 首次允許使用者登入後 `/api/*` 回 `401`，定位為 Worker 第二層 issuer／audience 設定；正式 team origin 與主 Application audience 已固定於 `wrangler.jsonc`，不得誤用 policy ID 或 lifecycle bypass audience |
 | Cloudflare API Token 最小權限 | 外部設定完成 | 使用單一 account-scoped token；權限限 Workers Scripts Edit、D1 Edit、Workers R2 Storage Edit、Account Settings Read，未給 DNS／Access／route／KV／Tail |
 | Cloudflare Worker／DO bootstrap | 外部驗證完成 | 同名 Hello World 只滿足 Worker record；本次先嘗試 `versions upload` 時因首次 `v1 new_sqlite_classes` 尚未建立而收到 code `10211`。已查核並重用 partial D1／R2、套用 `0001`–`0007`，再以無 secrets／assets／cron、預設 `503` 的 fail-closed normal deploy 套用同一 `ConnectionCoordinator` migration，隨後由完整版本取代；新環境不必刻意重現失敗 |
 | Custom domain → Worker mapping | 外部驗證完成／Pages 殘留待清理 | Cloudflare DNS 舊 GitHub Pages CNAME 已由 Worker Custom Domain 取代，`spam.buy2330.cc` TLS 可用；GitHub Pages 的 custom-domain 設定仍待移除，但目前不是 DNS origin，也不承載 Worker 流量 |
@@ -46,7 +47,8 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 2026-07-20 已在 Workers Vitest 本機環境執行：
 
-* `npm run check`：lint、typecheck、25 個 test files／138 個 tests、Worker 與 client production build 全部通過。Build 僅提示本機未提供七個 production secrets；CI 將由 Actions secret store 注入。
+* `npm run check`：lint、typecheck、25 個 test files／138 個 tests、Worker 與 client production build 全部通過。Build 僅提示本機未提供五個 production secrets；CI 將由 Actions secret store 注入，Access issuer／audience 則由版本化 vars 提供。
+* `wrangler deploy --dry-run`：確認 build redirect 後的實際部署設定包含正式 `TEAM_DOMAIN`／`POLICY_AUD` vars，且 `secrets.required` 只保留五項 Worker secret bindings。
 * `actionlint .github/workflows/deploy.yml`：通過。
 * `git diff --check`：通過。
 * OKF `manifest.json`：JSON 有效，與 28 個 Markdown 文件完全一致；本機 Markdown 連結可解析。
@@ -55,7 +57,7 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 仍需在外部環境執行並記錄：
 
-* 由允許的 Access 使用者完成一次應用登入及 Threads OAuth 往返，確認 `/api/me`、state 綁定與 token exchange 的 production 行為。
+* 修正版本 promotion 後，由允許的 Access 使用者重新驗證 `/api/me` 與工作區載入，再完成 Threads OAuth 往返，確認 state 綁定與 token exchange 的 production 行為。
 * 由 Meta 發送真實 signed deauthorization／data-deletion callback，確認 remote Durable Object → R2 → D1 清理、receipt status 與 Cron retry；目前只完成本機正負測試與 production 匿名 route matrix。
 * 演練日常 staged deployment 的 migration／activation 失敗復原，以及已驗證 version 的流量回復；首次 DO bootstrap 已完成，不應在一般發布中重做。
 
@@ -69,4 +71,4 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 # 結論
 
-OKF、程式、migration、workflow、本機品質閘門、一次性 fail-closed DO bootstrap、正式 GitHub Actions／Cloudflare 部署、`spam.buy2330.cc` mapping、Access 精確 path policy 與 Meta App callback URL 均已完成。剩餘遠端閘門是允許使用者的完整 Access／OAuth 往返、Meta 真實 signed callback 與 remote lifecycle cleanup；不得以匿名 invalid callback 路由驗證取代這些結論。
+OKF、程式、migration、workflow、本機品質閘門、一次性 fail-closed DO bootstrap、正式 GitHub Actions／Cloudflare 部署、`spam.buy2330.cc` mapping、Access 精確 path policy 與 Meta App callback URL 均已完成。Access issuer／audience 的部署模型已修正為版本化公開 vars；promotion 後仍必須以允許使用者驗證工作區載入。其後的遠端閘門是 Threads OAuth 往返、Meta 真實 signed callback 與 remote lifecycle cleanup；不得以匿名 invalid callback 路由驗證取代這些結論。

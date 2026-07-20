@@ -90,9 +90,9 @@ timestamp: "2026-07-19T12:00:00+08:00"
 1. 首次部署前先建立名稱精確相符的 Worker record，啟用 R2，並精確建立或重用 D1／R2；若較早的失敗步驟留下 partial state，只建立缺少的目標，不盲目重建或刪除。
 2. 以暫時的明確 D1／R2 binding、停用 automatic provisioning（`--no-experimental-provision`）套用或確認 D1 migrations `0001`–`0007`，再用同一 `ConnectionCoordinator` class／migration、無 runtime secrets／assets／cron且預設 `503` 的 fail-closed normal deploy 建立首次 DO migration。曾觀察到同名 Hello World Worker 上的 `versions upload` 以 code `10211` 失敗；這是 bootstrap 的理由，不是必要的部署步驟。
 3. 完成一次性 bootstrap 後，不含 `production` environment 或部署 secrets 的 `verify` job 先執行 lint、typecheck、test 與 build 品質閘門；只有成功才允許後續部署。
-4. `deploy` job 明確限制 `refs/heads/main`，並綁定只允許 exact `main` deployment branch 的 `production` environment；經 environment 核准後才取得限定單一 Cloudflare 帳戶的 API Token、帳戶識別與 runtime secrets。
-5. job 將應用 runtime secret 值寫入 runner 暫存目錄中的 `0600` secrets file，不輸出內容、不保存 artifact；Cloudflare API Token 本身不寫入該檔或 Worker runtime。
-6. workflow 使用 `wrangler versions upload` 上傳帶有 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 與 runtime secrets 的未啟用完整 Worker version；同一 commit 的新 run 由 run ID 區分，同一 run 的 rerun 由 run attempt 區分，上傳本身不切換正式流量。
+4. `deploy` job 明確限制 `refs/heads/main`，並綁定只允許 exact `main` deployment branch 的 `production` environment；經 environment 核准後才取得限定單一 Cloudflare 帳戶的 API Token、帳戶識別與五項剩餘 runtime bindings。Access team origin 與主 Application audience 是隨 commit review 的公開 Worker vars，不透過 secret store 傳遞。
+5. job 將五項剩餘 runtime 值寫入 runner 暫存目錄中的 `0600` secrets file，不輸出內容、不保存 artifact；Cloudflare API Token、公開 Access issuer/audience 本身不寫入該檔或 Worker Secrets。
+6. workflow 使用 `wrangler versions upload` 上傳帶有 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag、版本化 vars 與 runtime secrets 的未啟用完整 Worker version；同一 commit 的新 run 由 run ID 區分，同一 run 的 rerun 由 run attempt 區分，上傳本身不切換正式流量。
 7. upload 成功後，workflow 才執行遠端 D1 migration check／apply；成功後再依同一 run 的唯一 tag 啟用該 version。bootstrap 準備階段已套用本次 `0001`–`0007`，run `29696901680` attempt 4 因此確認 `No migrations to apply` 後完成 promotion。
 8. 無論成功、失敗或取消，`always()` cleanup 都移除 runner 暫存 secrets file。正式發布驗證另應在啟用後執行不含敏感資料的健康檢查，並保留 GitHub／Cloudflare 部署稽核。
 

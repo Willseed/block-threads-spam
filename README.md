@@ -30,10 +30,10 @@ Repository Actions secrets 必須包含兩個 CI 認證：
 
 `CLOUDFLARE_API_TOKEN` 應使用只限目標帳戶的 Custom API Token，不可使用 Global API Key。此專案部署與 automatic provisioning 所需的 account permissions 為 `Workers Scripts: Edit`、`Account Settings: Read`、`D1: Edit` 與 `Workers R2 Storage: Edit`。目前 workflow 不管理 Cloudflare Access、DNS 或 custom domain，也不需要 KV、Workers Tail 或 zone-level Workers Routes 權限。
 
-另需將 `wrangler.jsonc` 的七個 runtime secrets 同名存入 Repository Actions secrets；workflow 只會把這些值送進 Cloudflare Workers Secrets，不會寫入原始碼或 Wrangler 設定：
+Cloudflare Access 的 `TEAM_DOMAIN` 與 `POLICY_AUD` 是公開的驗證識別資訊，正式值固定在 `wrangler.jsonc` 的 `vars`，不屬於憑證或 GitHub Secrets。若更換 Access team domain 或主 Application，必須同步更新該設定並重新部署。
 
-- `TEAM_DOMAIN`
-- `POLICY_AUD`
+另需將 `wrangler.jsonc` 的五個 runtime secrets 同名存入 Repository Actions secrets；workflow 只會把這些值送進 Cloudflare Workers Secrets，不會寫入原始碼或 Wrangler 設定：
+
 - `APP_ORIGIN`
 - `SESSION_ENCRYPTION_KEY`
 - `COORDINATOR_NAMESPACE_KEY`
@@ -46,8 +46,8 @@ Repository Actions secrets 必須包含兩個 CI 認證：
 2. 啟用 R2 後，查核並精確重用既有 `threads-variant-guard-db` 與 `threads-variant-guard-evidence`；只建立實際缺少的資源，不可盲目重建或刪除 partial state。若較早的失敗 upload 已留下其中一項，也採相同原則處理。
 3. 以暫時的明確 D1／R2 binding 並停用 automatic provisioning（`--no-experimental-provision`），套用或確認 D1 migrations `0001`–`0007`。
 4. 以一次性的正常 `wrangler deploy` 套用 fail-closed bootstrap：使用同一個 `ConnectionCoordinator` class 與 `v1` migration、不帶 runtime secrets、assets 或 cron，且所有請求預設回應 `503`。bootstrap 只建立 DO migration 前置狀態，完成後立即由完整應用版本取代。
-5. 確認上述九個 Actions secrets、DO migration 與 D1／R2 binding 正確後，再啟動受保護 workflow。runner 以 `umask 077` 建立 `0600` 暫存 secrets file，job 無論成功或失敗都會清除。
-6. `wrangler versions upload` 以包含 commit SHA、run ID 與 retry attempt 的唯一 tag 上傳尚未接收流量的完整 Worker 版本，同時把七個 runtime secrets 納入該版本；同一個 job 接著執行 `wrangler d1 migrations apply DB --remote`，套用任何待辦 migration 或確認沒有待辦項目。
+5. 確認上述七個 Actions secrets、版本化 Access 驗證設定、DO migration 與 D1／R2 binding 正確後，再啟動受保護 workflow。runner 以 `umask 077` 建立 `0600` 暫存 secrets file，job 無論成功或失敗都會清除。
+6. `wrangler versions upload` 以包含 commit SHA、run ID 與 retry attempt 的唯一 tag 上傳尚未接收流量的完整 Worker 版本，同時把五個 runtime secrets 納入該版本；同一個 job 接著執行 `wrangler d1 migrations apply DB --remote`，套用任何待辦 migration 或確認沒有待辦項目。
 7. migration 檢查成功後才以該次唯一 tag 執行 `wrangler versions deploy`，讓新版本接收 100% 流量。後續部署維持 `versions upload` → D1 migration check／apply → tag promotion；若 upload 或 migration 失敗，既有部署維持不變，修復後可安全重跑。
 
 本帳戶曾在同名 Hello World Worker 上嘗試首次 `versions upload`，因 `v1 new_sqlite_classes` 尚未由正常 deploy 建立而收到 Cloudflare code `10211`；這是採用上述 bootstrap 的原因，不是新環境必須刻意重現的步驟。GitHub runner 是暫時環境，automatic provisioning 產生的資源識別不會回寫到 repository；遠端 binding 關係與實際資源名稱應在 Cloudflare dashboard 查核。Custom domain 與 Cloudflare Access Application 仍由 Cloudflare dashboard 管理。
@@ -74,10 +74,10 @@ Data Deletion callback 會回傳 `url` 與 `confirmation_code`；狀態端點只
 
 ## 應用程式登入
 
-Production 預設以 Cloudflare Access 作為應用身分層。Worker 會自行驗證 `Cf-Access-Jwt-Assertion` 的 RS256 簽章、issuer 與 audience；只把不可變 `sub` 當成使用者識別。部署時必須設定：
+Production 預設以 Cloudflare Access 作為應用身分層。Worker 會自行驗證 `Cf-Access-Jwt-Assertion` 的 RS256 簽章、issuer 與 audience；只把不可變 `sub` 當成使用者識別。下列公開驗證設定已版本化於 `wrangler.jsonc`：
 
-- `TEAM_DOMAIN`：例如 `https://your-team.cloudflareaccess.com`
-- `POLICY_AUD`：Access Application Audience tag
+- `TEAM_DOMAIN`：完整的 HTTPS Access team origin
+- `POLICY_AUD`：保護主站的 Access Application Audience tag，不是 policy ID 或 lifecycle bypass Application 的 audience
 
 若未設定或驗證失敗，所有受保護的 `/api/*` 都會 fail closed。Worker 內部的 `/api/health` 不要求 Access JWT，但目前整個 hostname 的 Access Application 仍會在邊界保護它；若未來要供匿名監控使用，必須另行評估並只對此路徑建立精確 bypass。
 

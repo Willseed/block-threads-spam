@@ -26,7 +26,7 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 * GitHub Actions 使用限定單一 Cloudflare 帳戶、只含部署必要操作的 API Token，不使用 Global API Key。
 * workflow permissions 預設為 `contents: read`；無 secrets 的 verify job 必須先成功。部署 job 明確限制 `refs/heads/main`，並綁定已在 GitHub 外部設定只允許 exact `main` deployment branch 的 `production` environment；fork pull request 不取得 secrets。
-* runtime secret 值只寫入 runner 暫存目錄中權限 `0600` 的 secrets file，供未啟用 version upload 使用；禁止放在命令列參數、debug trace、cache 或 artifact，並由 `always()` cleanup 移除。
+* Access team origin 與主 Application audience 是公開 JWT 驗證識別資訊，以版本化 Worker vars 保持可審核；五項剩餘 runtime 值只寫入 runner 暫存目錄中權限 `0600` 的 secrets file，供未啟用 version upload 使用。其中的機密值禁止放在命令列參數、debug trace、cache 或 artifact，並由 `always()` cleanup 移除。
 * Cloudflare API Token 與帳戶識別只存在部署平面，不列入 Worker bindings，也不進入 `.dev.vars`。
 * 第三方 action 固定可信版本；部署與 token 使用保留 GitHub／Cloudflare 管理稽核，並具備輪替與撤銷程序。
 

@@ -6,6 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "DEPLOY_ENV": "production",
+    "TEAM_DOMAIN": "https://pylot.cloudflareaccess.com",
+    "POLICY_AUD": "e23d585310a027f3efaff4f9554c4781a2cb78e1e99ffe3d494922a4354b7e5d",
     "META_GRAPH_API_VERSION": "v1.0",
     "REAUTH_MAX_AGE_SECONDS": "300",
     "FEATURE_META_PROFILE_LOOKUP": "false",
@@ -15,8 +17,6 @@
   },
   "secrets": {
     "required": [
-      "TEAM_DOMAIN",
-      "POLICY_AUD",
       "APP_ORIGIN",
       "SESSION_ENCRYPTION_KEY",
       "COORDINATOR_NAMESPACE_KEY",

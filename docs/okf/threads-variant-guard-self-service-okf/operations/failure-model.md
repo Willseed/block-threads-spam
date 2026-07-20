@@ -42,6 +42,7 @@ timestamp: "2026-07-20T12:00:00+08:00"
 | 未啟用 version 上傳成功但 D1 migration 失敗 | 不啟用新 version，現行 production version 維持服務 | 發布未完成 | 修復 migration 後由同一受保護 workflow 重跑；不得手動略過 migration 或直接啟用新 version |
 | D1 migration 成功但依 run-unique tag activation 失敗 | 新 schema 已套用，但新 version 不接收流量；保持既有 production version | 發布未完成 | 確認 migration 向後相容，修復 activation 後由同一受保護 workflow 安全重跑，並核對 SHA、run ID 與 run attempt 完整 tag |
 | custom domain、TLS 或 Access mapping 錯誤 | 不能把 Worker version 成功視為公開路由與信任邊界皆正常 | 網址不可用、錯誤指向或保護範圍不正確 | 查核 `spam.buy2330.cc` Worker custom domain、TLS、主 hostname Access 與三個精確 lifecycle bypass；匿名 route matrix 必須符合預期 |
+| Access issuer 或 audience 設定錯誤 | Access 邊界可完成登入，但 Worker 的第二層 JWT 驗證 fail closed，受保護 API 回 `401` | 網頁顯示無法開啟工作區 | 比對版本化 `TEAM_DOMAIN`、主 Application `POLICY_AUD` 與 Cloudflare Access 設定；不得誤用 policy ID 或 lifecycle bypass audience，修正後重新部署並以允許使用者驗證 `/api/me` |
 | 新 version 啟用後健康檢查失敗 | 停止後續發布，標記需回復 | 部署異常 | 依已驗證 version 回復流量並保存 GitHub／Cloudflare 稽核；已套用 migration 依相容性策略處理 |
 
 # 失敗關閉順序

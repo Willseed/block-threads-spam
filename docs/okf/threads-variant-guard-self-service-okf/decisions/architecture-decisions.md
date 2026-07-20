@@ -95,7 +95,7 @@ timestamp: "2026-07-20T12:00:00+08:00"
 
 # 決策十二：GitHub Actions 使用最小權限帳戶 token
 
-**決策**：部署使用限定單一 Cloudflare 帳戶及必要 Workers／D1／R2 操作的 API Token，不使用 Global API Key。無 secrets 的 verify job 先完成品質閘門；只有 `refs/heads/main` 可進入已設定 exact `main` 的 `production` environment。deploy job 以暫存 `0600` secrets file 上傳帶 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 的未啟用 version，成功完成 D1 migration check／apply 後才依同一 workflow run tag 啟用，並無條件清除暫存檔。首次 `v1 new_sqlite_classes` 不由 `versions upload` 建立；同名 Worker record 只滿足第一項前置條件。初始化應精確建立或重用 D1／R2、只補缺少的資源，以明確 binding、停用 automatic provisioning 套用 D1 migrations，再用同 class／migration、無 runtime secrets／assets／cron且預設 `503` 的 fail-closed bootstrap 執行一次正常 `wrangler deploy`，完成後立即由完整版本取代。
+**決策**：部署使用限定單一 Cloudflare 帳戶及必要 Workers／D1／R2 操作的 API Token，不使用 Global API Key。無 secrets 的 verify job 先完成品質閘門；只有 `refs/heads/main` 可進入已設定 exact `main` 的 `production` environment。Access team origin 與主 Application audience 屬公開驗證設定，納入版本化 Worker vars；五項剩餘 runtime bindings 經 deploy job 的暫存 `0600` secrets file 傳遞。job 上傳帶 `github-${sha}-${run_id}-${run_attempt}` 唯一 tag 的未啟用 version，成功完成 D1 migration check／apply 後才依同一 workflow run tag 啟用，並無條件清除暫存檔。首次 `v1 new_sqlite_classes` 不由 `versions upload` 建立；同名 Worker record 只滿足第一項前置條件。初始化應精確建立或重用 D1／R2、只補缺少的資源，以明確 binding、停用 automatic provisioning 套用 D1 migrations，再用同 class／migration、無 runtime secrets／assets／cron且預設 `503` 的 fail-closed bootstrap 執行一次正常 `wrangler deploy`，完成後立即由完整版本取代。
 
 **原因**：部署憑證與 Worker 執行期機密具有不同權限及生命週期；混用會讓程式漏洞擴張成 Cloudflare 帳戶管理權限。
 

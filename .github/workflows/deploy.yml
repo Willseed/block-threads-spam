@@ -64,8 +64,6 @@ jobs:
       - name: Prepare Worker secrets file
         shell: bash
         env:
-          TEAM_DOMAIN: ${{ secrets.TEAM_DOMAIN }}
-          POLICY_AUD: ${{ secrets.POLICY_AUD }}
           APP_ORIGIN: ${{ secrets.APP_ORIGIN }}
           SESSION_ENCRYPTION_KEY: ${{ secrets.SESSION_ENCRYPTION_KEY }}
           COORDINATOR_NAMESPACE_KEY: ${{ secrets.COORDINATOR_NAMESPACE_KEY }}
@@ -75,8 +73,6 @@ jobs:
           set -euo pipefail
           umask 077
           for name in \
-            TEAM_DOMAIN \
-            POLICY_AUD \
             APP_ORIGIN \
             SESSION_ENCRYPTION_KEY \
             COORDINATOR_NAMESPACE_KEY \
@@ -90,8 +86,6 @@ jobs:
           done
 
           jq -n '{
-            TEAM_DOMAIN: env.TEAM_DOMAIN,
-            POLICY_AUD: env.POLICY_AUD,
             APP_ORIGIN: env.APP_ORIGIN,
             SESSION_ENCRYPTION_KEY: env.SESSION_ENCRYPTION_KEY,
             COORDINATOR_NAMESPACE_KEY: env.COORDINATOR_NAMESPACE_KEY,
